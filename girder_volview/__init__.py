@@ -6,6 +6,7 @@ from girder import plugin
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api import access
 from girder.api.rest import (
+    getUrlParts,
     getApiUrl,
     boundHandler,
     setResponseHeader,
@@ -102,6 +103,7 @@ def isSessionFile(path):
         return True
     return False
 
+
 # Deprecated, use downloadManifest
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
@@ -139,8 +141,20 @@ def makeFileDownloadUrl(fileModel):
     :returns: the download URL.
     """
     fileUrl = "/".join(
-        (getApiUrl(), "file", str(fileModel["_id"]), "download", fileModel["name"])
+        (
+            getApiUrl(),
+            "file",
+            str(fileModel["_id"]),
+            "download",
+            fileModel["name"],
+        )
     )
+    # Replace http with https if the referer is https
+    # This only works because we know there is a referer header
+    referer = cherrypy.request.headers.get("referer", "")
+    refererScheme = getUrlParts(referer).scheme
+    noScheme = fileUrl[fileUrl.find(":") :]
+    fileUrl = refererScheme + noScheme
     return fileUrl
 
 
