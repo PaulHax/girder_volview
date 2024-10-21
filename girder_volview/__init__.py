@@ -55,7 +55,9 @@ LARGE_IMAGE_CONFIG_FOLDER = "large_image.config_folder"
 
 def hasLoadableFile(files, user=None):
     for fileEntry in files:
-        if isLoadableFile(fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry, user):
+        if isLoadableFile(
+            fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry, user
+        ):
             return True
     return False
 
@@ -97,45 +99,66 @@ def volViewLoadableFolder(self, folder):
     # iterator that yields a tuple of (path, file).  The aggregation is much
     # faster, as it only takes one database roundtrip, rather than one per
     # folder and one per item.
-    files = Folder().collection.aggregate([
-        {"$match": {"_id": folder["_id"]}},
-        {"$graphLookup": {
-            "from": "folder",
-            "startWith": folder["_id"],
-            "connectFromField": "_id",
-            "connectToField": "parentId",
-            "as": "__children"
-        }},
-        {"$lookup": {
-            "from": "folder",
-            "localField": "_id",
-            "foreignField": "_id",
-            "as": "__self",
-        }},
-        {"$project": {"__children": {"$concatArrays": [
-            "$__self", "$__children",
-        ]}}},
-        {"$unwind": {"path": "$__children"}},
-        {"$replaceRoot": {"newRoot": "$__children"}},
-        {"$match": Folder().permissionClauses(self.getCurrentUser(), level=AccessType.READ)},
-        {"$lookup": {
-            "from": "item",
-            "let": {"fid": "$_id"},
-            "pipeline": [
-                {"$match": {"$expr": {"$eq": ["$$fid", "$folderId"]}}},
-                {"$project": {"_id": 1}},
-            ],
-            "as": "__items",
-        }},
-        {"$lookup": {
-            "from": "file",
-            "localField": "__items._id",
-            "foreignField": "itemId",
-            "as": "__files",
-        }},
-        {"$unwind": "$__files"},
-        {"$replaceRoot": {"newRoot": "$__files"}},
-    ])
+    files = Folder().collection.aggregate(
+        [
+            {"$match": {"_id": folder["_id"]}},
+            {
+                "$graphLookup": {
+                    "from": "folder",
+                    "startWith": folder["_id"],
+                    "connectFromField": "_id",
+                    "connectToField": "parentId",
+                    "as": "__children",
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "folder",
+                    "localField": "_id",
+                    "foreignField": "_id",
+                    "as": "__self",
+                }
+            },
+            {
+                "$project": {
+                    "__children": {
+                        "$concatArrays": [
+                            "$__self",
+                            "$__children",
+                        ]
+                    }
+                }
+            },
+            {"$unwind": {"path": "$__children"}},
+            {"$replaceRoot": {"newRoot": "$__children"}},
+            {
+                "$match": Folder().permissionClauses(
+                    self.getCurrentUser(), level=AccessType.READ
+                )
+            },
+            {
+                "$lookup": {
+                    "from": "item",
+                    "let": {"fid": "$_id"},
+                    "pipeline": [
+                        {"$match": {"$expr": {"$eq": ["$$fid", "$folderId"]}}},
+                        {"$project": {"_id": 1}},
+                    ],
+                    "as": "__items",
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "file",
+                    "localField": "__items._id",
+                    "foreignField": "itemId",
+                    "as": "__files",
+                }
+            },
+            {"$unwind": "$__files"},
+            {"$replaceRoot": {"newRoot": "$__files"}},
+        ]
+    )
     loadable = hasLoadableFile(files, user=self.getCurrentUser())
     return {"loadable": loadable}
 
@@ -147,9 +170,13 @@ def uploadSession(model, parentId, user, size, metadata=None):
     try:
         # If the session was created due to a filter, include that as part of
         # the name.  Don't fail if it isn't formated as we expect.
-        if metadata and metadata.get('linkedResources') and metadata['linkedResources'].get('filter'):
-            firstFilter = list(iter(metadata['linkedResources']['filter'].values()))[0]
-            name = f'session.{firstFilter}{SESSION_ZIP_EXTENSION}'
+        if (
+            metadata
+            and metadata.get("linkedResources")
+            and metadata["linkedResources"].get("filter")
+        ):
+            firstFilter = list(iter(metadata["linkedResources"]["filter"].values()))[0]
+            name = f"session.{firstFilter}{SESSION_ZIP_EXTENSION}"
     except Exception:
         pass
 
@@ -322,15 +349,20 @@ def downloadManifest(self, item):
     .modelParam("folderId", model=Folder, level=AccessType.READ)
     .param("folders", "Folder IDs.", required=False)
     .param("items", "Item IDs.", required=False)
-    .jsonParam("filters", "Filters to apply within a folder.", required=False, requireObject=True)
+    .jsonParam(
+        "filters",
+        "Filters to apply within a folder.",
+        required=False,
+        requireObject=True,
+    )
     .produces(["application/json"])
     .errorResponse("ID was invalid.")
     .errorResponse("Read access was denied for the folders or items.", 403)
 )
 def downloadResourceManifest(self, folder, folders, items, filters):
     user = self.getCurrentUser()
-    folders = idStringToIdList(folders or '')
-    items = idStringToIdList(items or '')
+    folders = idStringToIdList(folders or "")
+    items = idStringToIdList(items or "")
     files = []
     if not folders and not items:
         if not filters:
@@ -376,7 +408,8 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         ):
             # session touched time is newer than selected items/folders so load it
             files = singleVolViewZipOrImageFiles(
-                Item().fileList(latestSession, subpath=False, data=False), user=user,
+                Item().fileList(latestSession, subpath=False, data=False),
+                user=user,
             )
         else:
             # Load selected folders and items excluding child session.volview.zip and .volview_config.yaml
@@ -528,7 +561,10 @@ def yamlConfigFile(folder, name, user, addConfig):
 )
 def getFolderConfigFile(self, folder, name):
     user = self.getCurrentUser()
-    baseConfig = {"dataBrowser": {"hideSampleData": True}}
+    baseConfig = {
+        "dataBrowser": {"hideSampleData": True},
+        "io": {"segmentGroupExtension": "seg"},
+    }
     config = yamlConfigFile(folder, name, user, baseConfig)
     return config
 
