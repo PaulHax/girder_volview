@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Nightly on the default branch (parity with the old CircleCI nightly).
+    - cron: "0 0 * * *"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server tests (tox)
+    runs-on: ubuntu-latest
+    # The canonical girder test image: preinstalled system deps + a girder 3.x
+    # toolchain, matching the old CircleCI primary image.
+    container: girder/girder_test:latest
+    services:
+      mongo:
+        image: mongo:4.0
+        # RAM-backed data dir keeps the per-test drop/reconnect cheap, mirroring
+        # the old `ephemeralForTest` CircleCI Mongo.
+        options: >-
+          --tmpfs /data/db
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tox
+        run: pip install --no-cache-dir tox
+      - name: Lint (ruff)
+        run: tox -e lint
+      - name: Server tests
+        # `-n auto` parallelizes across cores via pytest-xdist. Safe here because
+        # pytest-girder names each test's database uniquely, so workers sharing
+        # one Mongo never collide. The service is reachable at host `mongo`.
+        run: tox -e test -- -n auto --mongo-uri mongodb://mongo:27017
+
+  web-client:
+    name: Web client lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Install and lint
+        working-directory: girder_volview/web_client
+        run: |
+          npm install
+          npm run lint
+
+  # ---------------------------------------------------------------------------
+  # Paired cross-repo CONTRACT gate (required).
+  #
+  # Proves the backend's VENDORED contract copy (tests/contract/) matches the
+  # VolView revision this backend is paired with -- WITHOUT a second repo checkout
+  # or any env-var pin. The pin is already carried by the single source of truth
+  # every consumer honours: the `volview` version in web_client/package.json.
+  # `npm install` resolves that exact (SHA-embedded) version from the registry;
+  # the package ships its own backend-contract artifacts (VolView `files`), so we
+  # diff them against tests/contract/ directly. To re-pair, bump that one
+  # dependency version in the same PR that lands the coordinated contract change.
+  #
+  # The other half -- "VolView's generated contract is in sync with its zod
+  # source" -- is guaranteed by VolView's OWN CI (the generated-schema vitest spec
+  # under `npm test`), so the shipped artifacts are already fresh. That is why the
+  # verify runs with --no-generate and needs no zod/tsx toolchain here.
+  paired-contract:
+    name: Paired contract verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout girder_volview (self)
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the pinned VolView package (carries backend-contract)
+        working-directory: girder_volview/web_client
+        run: npm install
+      - name: Verify the backend's vendored contract matches the pinned client
+        run: |
+          girder_volview/web_client/node_modules/volview/backend-contract/scripts/verify-backend.sh \
+            --no-generate "$GITHUB_WORKSPACE"
+
+  # ---------------------------------------------------------------------------
+  # Paired BROWSER gate (the live token-only run+auto-apply flow).
+  #
+  # The spec (e2e/tests/run-and-apply.spec.ts, "token-only" describe block) drives
+  # the visible UI path — task picker -> task form -> provenance binding -> submit
+  # -> poll -> authenticated result stream -> live auto-apply — with token-only
+  # auth, and fails if selection, submission, polling, authenticated byte
+  # download, or auto-apply regresses.
+  #
+  # It needs a running paired stack (mongo + girder + girder_worker + the
+  # radiology CLI image serving the VolView dist). That stack is defined OUTSIDE
+  # this repo (digital_slide_archive/devops compose + the volview-radiology-cli
+  # image) and today is stood up by the machine-specific deploy-dev.sh, so this
+  # job is gated on an explicit opt-in until a portable CI bring-up exists. To
+  # enable it, provision the paired stack in the "Bring up paired stack" step
+  # (reachable at e2e/helpers/config.ts's localhost:8080 / admin / password) and
+  # set the repository variable RUN_PAIRED_BROWSER_GATE=true.
+  #
+  # The served VolView dist is the SAME pinned `volview` package as everywhere
+  # else: `girder build` installs it from web_client/package.json. No separate
+  # VolView checkout or ref pin is needed here either.
+  paired-browser:
+    name: Paired browser gate (token-only run + auto-apply)
+    runs-on: ubuntu-latest
+    if: ${{ vars.RUN_PAIRED_BROWSER_GATE == 'true' }}
+    steps:
+      - name: Checkout girder_volview (self)
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bring up paired stack
+        # MAINTAINER WIRING POINT: stand up mongo + girder + girder_worker + the
+        # radiology CLI image serving the pinned `volview` dist, reachable at
+        # http://localhost:8080 (admin/password) — see deploy-dev.sh +
+        # ensure-radiology-cli.sh. Left as an explicit step so the stack source
+        # (a separate devops repo) is provisioned deliberately, not implicitly.
+        run: |
+          echo "Provision the paired live stack here (see job comment)." >&2
+          exit 1
+      - name: Run the browser gate
+        working-directory: e2e
+        run: |
+          npm ci
+          npm run install-browser
+          npm test
