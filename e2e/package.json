@@ -1,0 +1,18 @@
+{
+  "name": "girder-volview-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-provisioning Playwright browser e2e for girder_volview + VolView — creates its own girder folder + synthetic images, then drives the save/load/restore F5-lifecycle (and the Jobs apply path) against a deployed developing-code stack, with automated URL/manifest assertions and screenshots.",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "list": "playwright test --list",
+    "install-browser": "playwright install chromium",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.6.0"
+  }
+}
