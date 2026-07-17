@@ -1,0 +1,9 @@
+# Provenance of the vendored backend-contract copy.
+# Written by backend-contract/scripts/sync-backend.sh -- DO NOT hand-edit.
+# tree_sha256 = sha256 of MANIFEST.sha256; the backend test re-derives it.
+contract_version=0.1.0
+spec_version=1
+intent_vocabulary_version=1
+client_git_sha=8c856066
+client_git_dirty=false
+tree_sha256=4e7512c3b1bc57b5ab76aee0b42ed346edff2018a64db145d6147c12996c38f3
