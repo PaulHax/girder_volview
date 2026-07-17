@@ -62,29 +62,9 @@ function checkedGroupingFilters(itemListView, resources) {
     return filters.length ? filters : null;
 }
 
-function loadResources(parentModel, resources) {
-    // update lastOpened so manifest endpoint opens checked resource
-    // rather than newest session.volview.zip with matching resource set.
-    const itemId =
-        resources.item && resources.item.length >= 1 && resources.item[0];
-    const folderId =
-        resources.folder && resources.folder.length >= 1 && resources.folder[0];
-    const id = itemId || folderId;
-    const model = (itemId && "item") || (folderId && "folder");
-
-    if (model) {
-        restRequest({
-            url: `${model}/${id}/metadata`,
-            method: "PUT",
-            contentType: "application/json",
-            data: JSON.stringify({ lastOpened: new Date() }),
-            error: null,
-        }).done(() => {
-            openResources(parentModel, resources);
-        });
-    } else {
-        openResources(parentModel, resources);
-    }
+function isSessionItem(item) {
+    const name = item.attributes.name;
+    return name.includes(".volview.zip") || name.includes(".volview.json");
 }
 
 wrap(HierarchyWidget, "render", function (render) {
@@ -116,7 +96,7 @@ wrap(HierarchyWidget, "render", function (render) {
                 this.itemListView.collection.get(cid)
             );
             const volViewZipsNewestFirst = items
-                .filter((item) => item.attributes.name.includes(".volview.zip") || item.attributes.name.includes(".volview.json"))
+                .filter(isSessionItem)
                 .sort(
                     (a, b) =>
                         new Date(b.attributes.created) -
@@ -125,28 +105,25 @@ wrap(HierarchyWidget, "render", function (render) {
 
             if (volViewZipsNewestFirst.length > 0) {
                 const volViewZip = volViewZipsNewestFirst[0];
+                const volViewResources = { item: [volViewZip.id] };
                 if (
                     items.length >= 2 ||
                     (resources.folder && resources.folder.length >= 1)
                 ) {
-                    // Only newest checked volview.zip item will be opened, so warn.
                     confirm({
-                        text: `Will open newest VolView zip file: ${volViewZip.attributes.name}.`,
+                        text: `Will open newest VolView session: ${volViewZip.attributes.name}.`,
                         yesText: "Open",
                         confirmCallback: () => {
-                            const volViewResources = { item: [volViewZip.id] };
-                            loadResources(this.parentModel, volViewResources);
+                            openResources(this.parentModel, volViewResources);
                         },
                     });
                     return false;
-                } else {
-                    const volViewResources = { item: [volViewZip.id] };
-                    loadResources(this.parentModel, volViewResources);
-                    return false;
                 }
+                openResources(this.parentModel, volViewResources);
+                return false;
             }
         }
-        loadResources(this.parentModel, resources);
+        openResources(this.parentModel, resources);
         return false;
     };
 
@@ -200,8 +177,12 @@ ItemListWidget.registeredApplications['volview'] = {
     // icon:
     check: (modelType, model, folder) => {
         if (modelType === 'item') {
-            if (model.get('name').endsWith('volview.zip') || model.get('name').endsWith('volview.json')) {
-                // use this
+            if (
+                model.get('name').endsWith('volview.zip') ||
+                model.get('name').endsWith('volview.json')
+            ) {
+                // A session.volview.zip/json item is openable history: the item
+                // route opens it through as a saved session (restore).
             } else {
                 try {
                     if (!model.get('meta') || !model.get('meta').dicom || model.get('meta').dicom.Modality === 'SM') {
