@@ -4,6 +4,6 @@
 contract_version=0.1.0
 spec_version=1
 intent_vocabulary_version=1
-client_git_sha=8c856066
+client_git_sha=31e05579
 client_git_dirty=false
-tree_sha256=4e7512c3b1bc57b5ab76aee0b42ed346edff2018a64db145d6147c12996c38f3
+tree_sha256=565675b2d1f93deeb10d2f5c6773d04f9a76fc2d076c8f09eba4d297f7fbd352

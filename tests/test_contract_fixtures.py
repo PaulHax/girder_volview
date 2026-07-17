@@ -5,6 +5,8 @@ source formats (e.g. Slicer XML) and their translated goldens are backend test
 fixtures, exercised by ``test_slicer_spec_translation``.
 """
 
+import json
+
 import jsonschema
 
 import contract_loader
@@ -75,7 +77,35 @@ def test_negative_fixtures_present():
     assert set(negatives) == {
         "unknown-field-kind",
         "constraint-violation",
+        "wrong-length-color",
     }
+
+
+def test_strict_intent_branch_rejects_wrong_length_color():
+    # The tuple-length parity pin: the generated result-intent schema is
+    # anyOf[strict known-intent branch, fail-open ordinary-result branch]. The
+    # STRICT branch must close fixed-length tuples exactly like the normative
+    # zod (minItems == maxItems == prefixItems length) — without that, a
+    # wrong-length segments[].color passes the generated schema while the
+    # client's zod demotes the row, defeating "one schema, two validators".
+    schema = contract_loader.load_generated_schema("result-intent")
+    strict = jsonschema.Draft202012Validator(schema["anyOf"][0])
+
+    good = contract_loader.load_fixture(
+        "wire/intent.add-segment-group.with-segments.json"
+    )
+    strict.validate(good)
+
+    short = contract_loader.load_fixture("negative/wrong-length-color.json")
+    assert not strict.is_valid(short)
+
+    long = json.loads(json.dumps(good))
+    long["segments"][0]["color"] = [255, 0, 0, 255, 255]
+    assert not strict.is_valid(long)
+
+    # The full union stays fail-open: the malformed row is still a readable
+    # ordinary result (no state action), exactly like the client's demotion.
+    jsonschema.Draft202012Validator(schema).validate(short)
 
 
 def test_generated_schemas_present_and_parse():

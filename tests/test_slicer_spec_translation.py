@@ -371,3 +371,78 @@ def test_bounds_to_region_fails_closed_on_non_six_finite():
     assert _bounds_to_region([1, 2, 3, 4, 5, "x"]) is None  # non-numeric element
     assert _bounds_to_region([1, 2, 3, 4, 5, float("inf")]) is None  # non-finite
     assert _bounds_to_region([1, 2, 3, 4, 5, float("nan")]) is None
+
+
+# ---------------------------------------------------------------------------
+# Messy numeric <default>/<constraints> values. _parse_float deliberately
+# degrades an unparseable string to NaN (parseFloat parity); the translate
+# boundary must then drop the value as absent -- int(nan) raises and Girder's
+# JSON encoder rejects NaN (allow_nan=False), so a NaN reaching the spec 500s
+# the whole task-spec endpoint instead of degrading one field.
+# ---------------------------------------------------------------------------
+
+_MESSY_NUMERIC_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<executable>
+  <title>Messy Numerics</title>
+  <description>d</description>
+  <parameters>
+    <label>Params</label>
+    <integer>
+      <name>iterations</name>
+      <label>Iterations</label>
+      <description>n</description>
+      <default>auto</default>
+      <constraints>
+        <minimum>auto</minimum>
+        <maximum>10</maximum>
+        <step>1</step>
+      </constraints>
+    </integer>
+    <double>
+      <name>sigma</name>
+      <label>Sigma</label>
+      <description>s</description>
+      <default>high</default>
+    </double>
+    <integer-enumeration>
+      <name>levels</name>
+      <label>Levels</label>
+      <description>l</description>
+      <default>auto</default>
+      <element>1</element>
+      <element>auto</element>
+      <element>3</element>
+    </integer-enumeration>
+  </parameters>
+</executable>
+"""
+
+
+def test_messy_numeric_defaults_degrade_instead_of_breaking_the_spec():
+    spec = translate_slicer_xml(_MESSY_NUMERIC_XML, "MessyNumerics")
+    params = {p["id"]: p for p in spec["parameters"]}
+
+    # int: NaN default and NaN min dropped; parseable constraints survive.
+    assert "default" not in params["iterations"]
+    assert "min" not in params["iterations"]
+    assert params["iterations"]["max"] == 10
+    assert params["iterations"]["step"] == 1
+
+    # float: NaN default dropped.
+    assert "default" not in params["sigma"]
+
+    # numeric enum: the NaN member and NaN default drop; real members survive.
+    assert params["levels"]["options"] == [1, 3]
+    assert "default" not in params["levels"]
+
+    # The degraded spec is still schema-valid -- fail soft, not open.
+    _task_spec_validator().validate(spec)
+
+
+def test_non_finite_region_default_is_omitted_fail_closed():
+    # float("nan") PARSES, so the six-parseable-numbers guard alone lets a NaN
+    # box through to the JSON encoder; non-finite components must also drop.
+    xml = _REGION_DEFAULT_XML.replace("10,20,30,1,2,3", "nan,20,30,1,2,3")
+    spec = translate_slicer_xml(xml, "RegionDefault")
+    roi = next(p for p in spec["parameters"] if p["kind"] == "bounds")
+    assert "default" not in roi

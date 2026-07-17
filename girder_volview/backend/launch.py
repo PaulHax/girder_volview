@@ -451,10 +451,8 @@ def yamlConfigFile(folder, name, user, addConfig):
                     if isinstance(config, list) and len(config) == 1:
                         config = config[0]
                     # combine and adjust config values based on current user
-                    if (
-                        isinstance(config, dict)
-                        and "access" in config
-                        or "group" in config
+                    if isinstance(config, dict) and (
+                        "access" in config or "groups" in config
                     ):
                         config = adjustConfigForUser(config, user)
                     if addConfig and isinstance(config, dict):

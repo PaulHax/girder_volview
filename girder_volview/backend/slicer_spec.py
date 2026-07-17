@@ -386,6 +386,16 @@ def _json_number(value):
     return value
 
 
+def _finite_or_none(value):
+    """Degrade a numeric that parsed to NaN/inf (see ``_parse_float``) to
+    "no value". Without this the int path crashes ``int(nan)`` and the float
+    path crashes Girder's JSON encoder (``allow_nan=False``) -- either way the
+    whole task-spec endpoint 500s instead of dropping one messy default."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def _image_accepts(image_type):
     """input ``<image>`` ``type`` -> ``sourceRef.accepts``.
 
@@ -436,6 +446,8 @@ def _region_default_to_bounds(default_value):
     try:
         cx, cy, cz, rx, ry, rz = (float(p) for p in parts)
     except ValueError:
+        return None
+    if not all(math.isfinite(v) for v in (cx, cy, cz, rx, ry, rz)):
         return None
     rx, ry, rz = abs(rx), abs(ry), abs(rz)
     x_lps = sorted((-(cx - rx), -(cx + rx)))
@@ -509,8 +521,10 @@ def _base_fields(parsed, order):
 
 def _translate_scalar(kind, parsed, base):
     param = {"kind": kind, **base}
-    constraints = parsed["constraints"]
-    default = parsed["default"]
+    constraints = {
+        k: v for k, v in parsed["constraints"].items() if _finite_or_none(v) is not None
+    }
+    default = _finite_or_none(parsed["default"])
     if kind == "int":
         for key in ("min", "max", "step"):
             if key in constraints:
@@ -553,10 +567,15 @@ def _translate_param(parsed, order):
         param = {
             "kind": "enum",
             **base,
-            "options": [_json_number(v) for v in (parsed["values"] or [])],
+            "options": [
+                _json_number(v)
+                for v in (parsed["values"] or [])
+                if _finite_or_none(v) is not None
+            ],
         }
-        if parsed["default"] is not None:
-            param["default"] = _json_number(parsed["default"])
+        default = _finite_or_none(parsed["default"])
+        if default is not None:
+            param["default"] = _json_number(default)
         return param
     if tag in _SCALAR_KIND:
         return _translate_scalar(_SCALAR_KIND[tag], parsed, base)
