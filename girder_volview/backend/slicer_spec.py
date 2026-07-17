@@ -1,0 +1,611 @@
+"""Slicer Execution Model XML -> VolView task spec (the backend half).
+
+This module ports the client parser's mapping tables
+(``src/processing/adapters/slicer-cli/parser/`` in VolView, itself ported from
+``slicer_cli_web``'s ``parser.js``) to the backend so the server emits VolView's
+own ``zod``-defined task spec and the client never parses a
+backend's XML. **Ported, not redesigned** -- the golden fixtures under
+``tests/contract/fixtures/task-spec/`` pin the output exactly.
+
+Two mappings are new here (the client port carried neither):
+
+- input ``<image>`` ``type`` -> ``sourceRef.accepts`` (the binding
+  convention): absent/``scalar`` -> ``["image"]``, ``label`` ->
+  ``["labelmap"]``; anything else -> an *unknown field kind* so the client
+  fails closed ("Unknown field kind -> fail closed").
+- Slicer ``<region>`` -> the ``bounds`` field kind (axis-aligned world box,
+  LPS on the wire).
+
+Pure standard library (``xml.etree``) so it imports without Girder -- the
+conformance test drives it with no server/Mongo.
+"""
+
+import math
+import re
+import xml.etree.ElementTree as ET
+
+# ---------------------------------------------------------------------------
+# XML helpers -- direct-child element access.
+#
+# ElementTree iterates only child *elements* (no text/comment nodes), so a
+# direct-child lookup is a simple filter -- the DOM ``firstChild``/``children``
+# the TS parser walked, minus the text-node bookkeeping.
+# ---------------------------------------------------------------------------
+
+
+def _first_child(el, tag):
+    return next((c for c in el if c.tag == tag), None)
+
+
+def _all_children(el, tag):
+    return [c for c in el if c.tag == tag]
+
+
+def _child_text(el, tag):
+    child = _first_child(el, tag)
+    if child is None or child.text is None:
+        return ""
+    return child.text
+
+
+# ---------------------------------------------------------------------------
+# Ported mapping tables -- widget.ts / convert.ts / constraints.ts /
+# defaultValue.ts. DO NOT redesign these: the fixtures pin them byte for byte.
+# ---------------------------------------------------------------------------
+
+# widget.ts ``TYPE_MAP``: Slicer element tag -> widget type. An unmapped tag
+# yields ``None`` (the caller treats it as an unknown field kind, fail closed).
+_TYPE_MAP = {
+    "integer": "number",
+    "float": "number",
+    "double": "number",
+    "boolean": "boolean",
+    "string": "string",
+    "integer-vector": "number-vector",
+    "float-vector": "number-vector",
+    "double-vector": "number-vector",
+    "string-vector": "string-vector",
+    "integer-enumeration": "number-enumeration",
+    "float-enumeration": "number-enumeration",
+    "double-enumeration": "number-enumeration",
+    "string-enumeration": "string-enumeration",
+    "region": "region",
+    "image": "image",
+    "file": "file",
+    "item": "item",
+    "directory": "directory",
+    "multi": "multi",
+}
+
+
+def _widget_type(tag):
+    return _TYPE_MAP.get(tag)
+
+
+# Leading numeric run, JS ``parseFloat``-style (optional sign, digits, decimal,
+# exponent).
+_LEADING_FLOAT = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?")
+
+
+def _parse_float(value):
+    # Emulate JS ``parseFloat``: the shipped radiology CLIs use clean numeric
+    # strings, but a stray lenient value (``"1,000"``, ``"50%"``, ``"1.5x"``)
+    # must degrade to its leading number the way the reference client did,
+    # rather than raising ``ValueError`` and 500-ing the whole task-spec
+    # endpoint. No leading number yields NaN, matching ``parseFloat``.
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        match = _LEADING_FLOAT.match(str(value).strip())
+        return float(match.group(0)) if match else float("nan")
+
+
+def _convert(widget_type, value):
+    """convert.ts -- coerce a raw XML string to the widget's value type."""
+    if widget_type in ("number", "number-enumeration"):
+        return _parse_float(value)
+    if widget_type == "boolean":
+        return value.lower() == "true"
+    if widget_type == "number-vector":
+        return [_parse_float(s) for s in value.split(",")]
+    if widget_type == "string-vector":
+        return value.split(",")
+    return value
+
+
+def _parse_constraints(widget_type, constraints_el):
+    """constraints.ts -- ``<constraints>`` -> ``{min,max,step}`` (converted)."""
+    if constraints_el is None:
+        return {}
+    spec = {}
+    minimum = _child_text(constraints_el, "minimum")
+    maximum = _child_text(constraints_el, "maximum")
+    step = _child_text(constraints_el, "step")
+    if minimum:
+        spec["min"] = _convert(widget_type, minimum)
+    if maximum:
+        spec["max"] = _convert(widget_type, maximum)
+    if step:
+        spec["step"] = _convert(widget_type, step)
+    return spec
+
+
+def _parse_default(widget_type, default_el):
+    """defaultValue.ts -- ``<default>`` -> the converted value, or ``None``.
+
+    Template placeholders (``{{x}}``) are skipped exactly as the JS parser did.
+    """
+    if default_el is None:
+        return None
+    text = default_el.text or ""
+    if len(text) == 0:
+        return None
+    is_template = text[:2] == "{{" and text[-2:] == "}}"
+    if not is_template:
+        return _convert(widget_type, text)
+    defstr = "__default__"
+    converted = _convert(widget_type, defstr)
+    if converted == defstr:
+        return converted
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Parse -- <executable> -> ordered parsed params (port of parse.ts / panel.ts /
+# group.ts / param.ts). Each panel's direct-child <label> opens a group/section;
+# the params that follow it (up to the next <label>, <description> excluded)
+# belong to it. Output shaping is left to the translate layer below.
+# ---------------------------------------------------------------------------
+
+
+def _parse_param(param_el, section):
+    tag = param_el.tag
+    widget = _widget_type(tag)
+    channel = "output" if _child_text(param_el, "channel") == "output" else "input"
+    param_id = _child_text(param_el, "name") or _child_text(param_el, "longflag")
+    required = len(_child_text(param_el, "index")) > 0
+    values = None
+    if widget in ("string-enumeration", "number-enumeration"):
+        values = [
+            _convert(widget, el.text or "") for el in _all_children(param_el, "element")
+        ]
+    return {
+        "tag": tag,  # slicerType -- the raw element name
+        "widget": widget,  # WidgetType, or None for an unmapped tag
+        "channel": channel,
+        "id": param_id,
+        "title": _child_text(param_el, "label"),
+        "help": _child_text(param_el, "description"),
+        "section": section,
+        "required": required,
+        "imageType": param_el.get("type"),  # NEW: input <image> type -> accepts
+        "fileExtensions": param_el.get("fileExtensions"),
+        "values": values,
+        "default": _parse_default(widget, _first_child(param_el, "default")),
+        "constraints": _parse_constraints(
+            widget, _first_child(param_el, "constraints")
+        ),
+    }
+
+
+def _parse_panel(panel_el):
+    """Group a ``<parameters>`` panel's children by their leading ``<label>``.
+
+    Returns ``[(section_label, [param_el, ...]), ...]`` in document order.
+    """
+    groups = []
+    current = None
+    for child in panel_el:
+        if child.tag == "label":
+            current = (child.text or "", [])
+            groups.append(current)
+        elif child.tag == "description":
+            continue
+        elif current is not None:
+            current[1].append(child)
+    return groups
+
+
+def _params_from_root(root):
+    """Ordered parsed params across every ``<parameters>`` panel (shared walk).
+
+    Extracted so the strict spec path (``_parse_executable``) and the tolerant
+    backend surface (``parse_cli``) reuse the one panel/group/param walk.
+    """
+    params = []
+    for panel_el in _all_children(root, "parameters"):
+        for section, param_els in _parse_panel(panel_el):
+            for param_el in param_els:
+                params.append(_parse_param(param_el, section))
+    return params
+
+
+def _parse_executable(xml_text):
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        raise ValueError("Invalid Slicer CLI XML: {}".format(exc)) from exc
+    if root.tag != "executable":
+        raise ValueError("Slicer CLI XML missing <executable>")
+    return {
+        "title": _child_text(root, "title"),
+        "description": _child_text(root, "description"),
+        "params": _params_from_root(root),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Single-walk backend surface -- ``parse_cli`` consolidates the two
+# duplicate XML walks the backend used to run (the deleted
+# ``_cliCategory`` + ``_parseCliOutputs``) with the
+# parsed-param walk into ONE ElementTree parse per call ("one XML walk, not
+# three"): a single ``parse_cli`` yields the category, the output descriptors, and
+# the parsed params together. A submission still needs the label-independent
+# ``declared_params`` walk too (a second parse), so ``runTask`` parses the CLI
+# exactly twice -- once via ``parse_cli`` and once via ``declared_params`` -- and
+# threads both structures into the submit helpers rather than re-parsing per guard.
+# Mappings are PORTED, not reinvented: the emitted
+# ``<category>`` text and ``{name, tag, isLabel, fileExtensions}`` descriptors are
+# byte-for-byte what the deleted walkers produced.
+# ---------------------------------------------------------------------------
+
+
+def parse_cli(xml_text):
+    """Parse a Slicer CLI XML once into ``{category, outputs, params}``.
+
+    A SINGLE ElementTree walk replacing the backend's two duplicate walks
+    (``_cliCategory`` + ``_parseCliOutputs``): ``category``
+    (the stripped ``<category>``, or ``None``) is what task scoping reads;
+    ``outputs`` is the ``{name, tag, isLabel, fileExtensions}`` descriptor list --
+    every ``<image>``/``<file>`` output-channel param declaring a ``<name>`` --
+    that reference-bound collection records and autofill reads; ``params`` is the
+    raw parsed-param list. The category/output shapes are byte-for-byte what the
+    deleted walkers produced (``isLabel`` = ``type == "label"``; ``fileExtensions``
+    lowercased).
+
+    Tolerant like the walkers it replaces: an unparseable document yields
+    ``{category: None, outputs: [], params: []}`` (a malformed CLI is out of
+    scope / autofills nothing). The strict spec path keeps ``_parse_executable``.
+    """
+    try:
+        root = ET.fromstring(xml_text or "")
+    except ET.ParseError:
+        return {"category": None, "outputs": [], "params": []}
+    category_el = root.find("category")
+    if category_el is not None and category_el.text:
+        category = category_el.text.strip() or None
+    else:
+        category = None
+    outputs = []
+    for param in root.iter():
+        channel_el = param.find("channel")
+        if channel_el is None or (channel_el.text or "").strip() != "output":
+            continue
+        if param.tag not in {"image", "file"}:
+            continue
+        name_el = param.find("name")
+        if name_el is None or not name_el.text:
+            continue
+        outputs.append(
+            {
+                "name": name_el.text.strip(),
+                "tag": param.tag,
+                "isLabel": param.get("type") == "label",
+                "fileExtensions": (param.get("fileExtensions") or "").lower(),
+            }
+        )
+    return {"category": category, "outputs": outputs, "params": _params_from_root(root)}
+
+
+def declared_params(xml_text):
+    """Every parameter a CLI declares, keyed by name, independent of UI sectioning.
+
+    The submit boundary validates submissions against exactly what the CLI
+    declares. Unlike ``_params_from_root`` (which groups params under their leading
+    ``<label>`` for the ordered spec walk and drops any param not under a section),
+    this walks every param element under every ``<parameters>`` panel — a
+    parameter's identity as an accepted submission key does not depend on how the
+    UI sections it. A param is any direct child whose tag is a known widget type
+    (``_TYPE_MAP``); its key is its ``<name>`` (or ``<longflag>``).
+
+    Each entry carries what submit-time value validation needs, projected from the
+    same ``_parse_param`` walk the ordered spec path uses (so the widget lookup,
+    channel test, name/longflag key, enum-member conversion, and ``<constraints>``
+    parse never drift between the two surfaces): ``tag`` (the raw Slicer element),
+    ``widget`` (its ``_TYPE_MAP`` type), ``channel``, ``constraints``
+    (``{min,max,step}``) and ``options`` (converted enumeration members, or
+    ``None``). Tolerant: an unparseable document declares nothing.
+    """
+    try:
+        root = ET.fromstring(xml_text or "")
+    except ET.ParseError:
+        return {}
+    params = {}
+    for panel in root.findall("parameters"):
+        for el in panel:
+            if _widget_type(el.tag) is None:
+                continue
+            parsed = _parse_param(el, section="")
+            name = parsed["id"]
+            if not name:
+                continue
+            params[name] = {
+                "tag": parsed["tag"],
+                "widget": parsed["widget"],
+                "channel": parsed["channel"],
+                "constraints": parsed["constraints"],
+                # ``_parse_param`` only fills ``values`` for enum widgets (else
+                # None) -- exactly the enumeration members this exposes as options.
+                "options": parsed["values"],
+            }
+    return params
+
+
+# ---------------------------------------------------------------------------
+# Translate -- parsed params -> VolView task spec. This is where the imaging
+# field kinds (sourceRef / bounds) and the int/float split are produced; the
+# ported tables above deliberately do not know the spec vocabulary.
+# ---------------------------------------------------------------------------
+
+_SPEC_VERSION = 1
+
+# Below-the-line b3 injection params: a CLI that fetches its own inputs via
+# girder_client declares ``girderApiUrl``/``girderToken`` as ``<string>`` params
+# so ``slicer_cli_web`` can inject them at run time (the HistomicsTK
+# ``example-girder-requests`` convention). They are server-plumbing, never task
+# parameters, so the translator drops them: they must not reach the client spec/
+# form, and the golden task-spec fixtures carry none. (The submit-time
+# reserved-param deny-list is a separate defense.)
+_RESERVED_INPUT_PARAMS = frozenset(("girderApiUrl", "girderToken"))
+
+# slicerType (element tag) -> scalar spec kind. Recovers the int/float split the
+# ported widget table collapses to a single "number".
+_SCALAR_KIND = {
+    "integer": "int",
+    "float": "float",
+    "double": "float",
+    "string": "string",
+    "boolean": "bool",
+}
+
+_ENUM_TAGS = frozenset(
+    (
+        "integer-enumeration",
+        "float-enumeration",
+        "double-enumeration",
+        "string-enumeration",
+    )
+)
+
+
+def _json_number(value):
+    """Canonicalize an integral float to ``int`` so emitted JSON matches the
+    fixtures (``50.0`` -> ``50``); genuine fractionals pass through."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _image_accepts(image_type):
+    """input ``<image>`` ``type`` -> ``sourceRef.accepts``.
+
+    ``None`` (no type attr) or ``scalar`` -> ``["image"]``; ``label`` ->
+    ``["labelmap"]``; anything else -> ``None``, signalling the caller to emit
+    an unknown field kind (fail closed). The tag set stays an open vocabulary
+    -- no closed server enum.
+    """
+    if image_type is None or image_type == "scalar":
+        return ["image"]
+    if image_type == "label":
+        return ["labelmap"]
+    return None
+
+
+def _output_type(parsed):
+    """Declared output ``type``: image outputs reuse the accepts vocabulary
+    (image/labelmap); file outputs are ``file``; anything else passes through
+    (outputs are an open vocabulary -- an unknown one has no state action)."""
+    if parsed["tag"] == "file":
+        return "file"
+    image_type = parsed["imageType"]
+    if image_type is None or image_type == "scalar":
+        return "image"
+    if image_type == "label":
+        return "labelmap"
+    return image_type
+
+
+def _region_default_to_bounds(default_value):
+    """Slicer ``<region>`` default -> VolView ``bounds``.
+
+    A Slicer region default is ``cx,cy,cz,rx,ry,rz`` -- center + radius in RAS
+    (Slicer's native frame). VolView ``bounds`` is an axis-aligned min/max box
+    ``[xmin,xmax,ymin,ymax,zmin,zmax]`` in LPS, so RAS->LPS negates X and Y
+    (swapping their min/max). Fail closed: a default that is not six parseable
+    numbers yields *no* bounds default rather than a malformed one.
+
+    No shipped radiology CLI carries a ``<region>`` default, so this coordinate
+    conversion is unpinned by the golden fixtures -- the chosen convention is
+    locked by ``test_slicer_spec_translation.py``.
+    """
+    if not isinstance(default_value, str) or not default_value:
+        return None
+    parts = [p.strip() for p in default_value.split(",")]
+    if len(parts) != 6:
+        return None
+    try:
+        cx, cy, cz, rx, ry, rz = (float(p) for p in parts)
+    except ValueError:
+        return None
+    rx, ry, rz = abs(rx), abs(ry), abs(rz)
+    x_lps = sorted((-(cx - rx), -(cx + rx)))
+    y_lps = sorted((-(cy - ry), -(cy + ry)))
+    z_lps = (cz - rz, cz + rz)
+    return [
+        _json_number(x_lps[0]),
+        _json_number(x_lps[1]),
+        _json_number(y_lps[0]),
+        _json_number(y_lps[1]),
+        _json_number(z_lps[0]),
+        _json_number(z_lps[1]),
+    ]
+
+
+def _bounds_to_region(bounds):
+    """VolView ``bounds`` (LPS min/max box) -> Slicer ``<region>`` center+radius (RAS).
+
+    The exact inverse of ``_region_default_to_bounds``, applied at SUBMIT: the
+    client mints a crop box as ``[xmin,xmax,ymin,ymax,zmin,zmax]`` in world LPS,
+    but a Slicer ``<region>`` CLI param expects ``cx,cy,cz,rx,ry,rz`` -- center +
+    radius in RAS (Slicer's native frame). Recovering center/radius from the box
+    inverts ``_region_default_to_bounds``' algebra: ``cx = -(xmin+xmax)/2`` and
+    ``rx = (xmax-xmin)/2`` (LPS->RAS negates X and Y, so the center negates while
+    the radius, a magnitude, stays non-negative); Y is negated the same way; Z
+    passes through unmapped (``cz = (zmin+zmax)/2``, ``rz = (zmax-zmin)/2``).
+
+    Fail closed: a value that is not six finite numbers yields ``None`` (the
+    submit boundary turns that into a 400 naming the parameter) rather than a
+    malformed region string reaching the CLI.
+    """
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 6:
+        return None
+    try:
+        xmin, xmax, ymin, ymax, zmin, zmax = (float(p) for p in bounds)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (xmin, xmax, ymin, ymax, zmin, zmax)):
+        return None
+    cx = -(xmin + xmax) / 2
+    cy = -(ymin + ymax) / 2
+    cz = (zmin + zmax) / 2
+    rx = abs(xmax - xmin) / 2
+    ry = abs(ymax - ymin) / 2
+    rz = abs(zmax - zmin) / 2
+    return [
+        _json_number(cx),
+        _json_number(cy),
+        _json_number(cz),
+        _json_number(rx),
+        _json_number(ry),
+        _json_number(rz),
+    ]
+
+
+def _base_fields(parsed, order):
+    """The UI/identity fields every param kind shares, blanks omitted so the
+    output matches the fixtures (which carry no empty strings)."""
+    base = {"id": parsed["id"]}
+    if parsed["title"]:
+        base["title"] = parsed["title"]
+    if parsed["help"]:
+        base["help"] = parsed["help"]
+    if parsed["section"]:
+        base["section"] = parsed["section"]
+    base["order"] = order
+    if parsed["required"]:
+        base["required"] = True
+    return base
+
+
+def _translate_scalar(kind, parsed, base):
+    param = {"kind": kind, **base}
+    constraints = parsed["constraints"]
+    default = parsed["default"]
+    if kind == "int":
+        for key in ("min", "max", "step"):
+            if key in constraints:
+                param[key] = int(constraints[key])
+        if default is not None:
+            param["default"] = int(default)
+    elif kind == "float":
+        for key in ("min", "max", "step"):
+            if key in constraints:
+                param[key] = _json_number(constraints[key])
+        if default is not None:
+            param["default"] = _json_number(default)
+    elif default is not None:  # string, bool
+        param["default"] = default
+    return param
+
+
+def _translate_param(parsed, order):
+    tag = parsed["tag"]
+    base = _base_fields(parsed, order)
+
+    # imaging-native field kinds -----------------------------------------
+    if tag == "image":
+        accepts = _image_accepts(parsed["imageType"])
+        if accepts is None:
+            # unknown <image> type -> unknown field kind (fail closed).
+            return {"kind": parsed["imageType"], **base}
+        return {"kind": "sourceRef", **base, "accepts": accepts}
+    if tag == "region":
+        param = {"kind": "bounds", **base}
+        bounds_default = _region_default_to_bounds(parsed["default"])
+        if bounds_default is not None:
+            param["default"] = bounds_default
+        return param
+
+    # typed scalar fields ------------------------------------------------
+    if tag in _ENUM_TAGS:
+        # Numeric enum members canonicalize like the scalar path (1.0 -> 1) so
+        # the emitted JSON carries clean integers; string members pass through.
+        param = {
+            "kind": "enum",
+            **base,
+            "options": [_json_number(v) for v in (parsed["values"] or [])],
+        }
+        if parsed["default"] is not None:
+            param["default"] = _json_number(parsed["default"])
+        return param
+    if tag in _SCALAR_KIND:
+        return _translate_scalar(_SCALAR_KIND[tag], parsed, base)
+
+    # anything else -> unknown field kind (fail closed) ------------------
+    return {"kind": tag, **base}
+
+
+def _translate_output(parsed):
+    entry = {"id": parsed["id"]}
+    if parsed["title"]:
+        entry["title"] = parsed["title"]
+    if parsed["help"]:
+        entry["help"] = parsed["help"]
+    entry["type"] = _output_type(parsed)
+    if parsed["fileExtensions"]:
+        entry["format"] = parsed["fileExtensions"]
+    return entry
+
+
+def translate_slicer_xml(xml_text, task_id):
+    """Translate a Slicer Execution Model XML document into a VolView task spec.
+
+    ``task_id`` is the CLI identity that becomes the spec ``id`` -- it is not
+    carried in the XML, so the caller (the ``tasks/{id}/spec`` route) supplies
+    it. Returns a plain ``dict`` ready to serialize as the spec JSON.
+    """
+    doc = _parse_executable(xml_text)
+    parameters = []
+    outputs = []
+    order = 0
+    for parsed in doc["params"]:
+        if parsed["channel"] == "output":
+            # File/image outputs are declarations; scalar parameter-outputs are
+            # not v1 spec fields (the ported parser dropped them too).
+            if parsed["tag"] in ("image", "file"):
+                outputs.append(_translate_output(parsed))
+            continue
+        if parsed["id"] in _RESERVED_INPUT_PARAMS:
+            # b3 injection plumbing (girderApiUrl/girderToken) -- below the line,
+            # never a client-facing param. Skip before ``order`` advances so the
+            # remaining params keep their fixture-pinned order numbers.
+            continue
+        parameters.append(_translate_param(parsed, order))
+        order += 1
+
+    spec = {"specVersion": _SPEC_VERSION, "id": task_id, "title": doc["title"]}
+    if doc["description"]:
+        spec["description"] = doc["description"]
+    spec["parameters"] = parameters
+    spec["outputs"] = outputs
+    return spec

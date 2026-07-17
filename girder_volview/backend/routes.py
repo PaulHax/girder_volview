@@ -1,0 +1,894 @@
+"""Processing backend -- REST routes + job creation + route registration.
+
+This module owns the wire surface: the ``@boundHandler`` route functions, the
+single live slicer_cli_web job-creation touch point (``_genDockerJob``), and
+``addBackendRoutes`` (event bindings + route table).
+
+Cross-module helper calls are MODULE-QUALIFIED on purpose (``submit._foo`` /
+``inputs._foo`` / ``outputs._foo`` / ``results._foo``) so a test that patches a
+helper on its DEFINING module reaches the call site here (the monkeypatch-target
+contract) — a bare ``from .submit import _foo`` would bind a name that a
+later ``setattr(submit, "_foo", ...)`` could not reach.
+"""
+
+import base64
+import binascii
+import copy
+import datetime
+import json
+import uuid
+
+import cherrypy
+from girder import events, logger
+from girder.api import access
+from girder.api.describe import Description, autoDescribeRoute
+from girder.api.rest import Resource, boundHandler
+from girder.constants import AccessType, TokenScope
+from girder.exceptions import RestException, ValidationException
+from girder.models.folder import Folder
+
+from ..utils import makeFileDownloadUrl, JOB_OUTPUT_FOLDER_META_KEY
+from .slicer_spec import translate_slicer_xml, declared_params
+from . import inputs, submit, outputs, results
+
+
+# ---------------------------------------------------------------------------
+# Launch-context routes (folder-addressed)
+# ---------------------------------------------------------------------------
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("List processing tasks available for a folder.")
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .produces(["application/json"])
+)
+def listTasks(self, folder):
+    user = self.getCurrentUser()
+    tasks = []
+    if user and submit._slicerCliAvailable():
+        try:
+            tasks.extend(
+                [submit._cliItemToSummary(c) for c in submit._scopedCliItems(user)]
+            )
+        except Exception:
+            logger.exception("Failed to list slicer_cli_web items")
+    return tasks
+
+
+# Explicit short lifetime for the CLI-container token. Without ``days`` Girder
+# applies ``core.cookie_lifetime`` (180 days by default), leaving a broad data-plane
+# credential valid for months after the job ends. One day is long enough to cover
+# queue wait + run time and short enough to bound credential exposure if the token
+# leaks (a compromised image, broker, or command-line capture). Full per-job
+# lifecycle revocation (persist + revoke on every terminal/rollback path) is
+# deliberately deferred; this TTL is the immediate bound.
+_CONTAINER_TOKEN_TTL_DAYS = 1.0
+
+JOB_HISTORY_PAGE_DEFAULT = 25
+JOB_HISTORY_PAGE_MAX = 100
+JOB_HISTORY_INDEX = "volview_job_history"
+JOB_OUTPUT_FOLDER_INDEX = "volview_output_folder"
+_SUBMISSION_ID_FIELD = "volviewSubmissionId"
+_SUBMITTED_PARAMETERS_FIELD = "volviewSubmittedParameters"
+
+
+def ensureJobHistoryIndexes(jobModel=None):
+    """Install the indexes the history list and output-correlation queries need.
+
+    Two indexes back the job-addressed query paths: a compound index for the
+    personal newest-first history page, and a point-lookup index on the private
+    output-folder id -- ``outputs._jobForOutputFolder`` runs a ``findOne`` on it
+    for EVERY finalized output upload, so without the index each correlation is a
+    full jobs-collection scan that worsens as history grows.
+    """
+    if jobModel is None:
+        from girder_jobs.models.job import Job as JobModel
+
+        jobModel = JobModel()
+    jobModel.collection.create_index(
+        [
+            (inputs._LAUNCH_FOLDER_FIELD, 1),
+            ("userId", 1),
+            ("created", -1),
+            ("_id", -1),
+        ],
+        name=JOB_HISTORY_INDEX,
+    )
+    jobModel.collection.create_index(
+        [(outputs._OUTPUT_FOLDER_ID_FIELD, 1)],
+        name=JOB_OUTPUT_FOLDER_INDEX,
+    )
+
+
+def _encodeJobCursor(job):
+    payload = json.dumps(
+        {
+            "created": results._toIso(job.get("created")),
+            "id": str(job["_id"]),
+        },
+        separators=(",", ":"),
+    ).encode("utf8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decodeJobCursor(cursor):
+    from bson.objectid import ObjectId
+
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        value = json.loads(base64.urlsafe_b64decode(padded).decode("utf8"))
+        created = datetime.datetime.fromisoformat(value["created"])
+        if created.tzinfo is not None:
+            created = created.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return created, ObjectId(value["id"])
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError, binascii.Error):
+        raise RestException("Invalid job history cursor", code=400) from None
+
+
+def _jobHistoryPageSize(limit):
+    try:
+        pageSize = int(limit if limit is not None else JOB_HISTORY_PAGE_DEFAULT)
+        if pageSize < 1 or pageSize > JOB_HISTORY_PAGE_MAX:
+            raise ValueError()
+        return pageSize
+    except (TypeError, ValueError):
+        raise RestException("Invalid job history limit", code=400) from None
+
+
+def _jobCursorContinuation(cursor):
+    created, jobId = _decodeJobCursor(cursor)
+    return [
+        {"created": {"$lt": created}},
+        {"created": created, "_id": {"$lt": jobId}},
+    ]
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("List the current user's complete processing-job history.")
+    .notes(
+        "Returns a bounded newest-first page of lightweight summaries. The "
+        "continuation cursor is opaque; pagination bounds responses, never "
+        "history retention. Logs and submitted parameters are detail-only."
+    )
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .param("limit", "Page size (1-100).", required=False, dataType="integer")
+    .param("cursor", "Opaque continuation cursor.", required=False)
+    .produces(["application/json"])
+)
+def listJobHistory(self, folder, limit=JOB_HISTORY_PAGE_DEFAULT, cursor=None):
+    user = self.getCurrentUser()
+    if not user:
+        return {"jobs": [], "nextCursor": None}
+    from girder.constants import SortDir
+    from girder_jobs.models.job import Job as JobModel
+
+    pageSize = _jobHistoryPageSize(limit)
+    query = {
+        inputs._LAUNCH_FOLDER_FIELD: str(folder["_id"]),
+        "userId": user["_id"],
+    }
+    if cursor:
+        query["$or"] = _jobCursorContinuation(cursor)
+    found = JobModel().findWithPermissions(
+        query=query,
+        user=user,
+        jobUser=user,
+        level=AccessType.READ,
+        sort=[("created", SortDir.DESCENDING), ("_id", SortDir.DESCENDING)],
+        limit=pageSize + 1,
+        # Exclude the (unbounded, multi-MB on chatty/failed CLIs) log from every
+        # page: the summary projection never reads it, so materializing it per job
+        # is pure cost. Mirrors JobModel.load(includeLog=False)'s {'log': False}
+        # exclusion projection.
+        fields={"log": False},
+    )
+    page = list(found)
+    hasMore = len(page) > pageSize
+    page = page[:pageSize]
+    readableOutputFiles = results._readableOutputFilesForJobs(page, user)
+    return {
+        "jobs": [
+            results._projectJobHistorySummary(
+                job, user, readableOutputFiles=readableOutputFiles
+            )
+            for job in page
+        ],
+        "nextCursor": _encodeJobCursor(page[-1]) if hasMore else None,
+    }
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Get the VolView task spec for a task.")
+    .modelParam("folderId", model=Folder, level=AccessType.READ)
+    .param("taskId", "The task identifier.", paramType="path")
+)
+def getTaskSpec(self, folder, taskId):
+    # The backend translates the Slicer XML into VolView's own task spec
+    # server-side, so the client never parses backend XML. Scope guards: an
+    # out-of-scope / unknown / slicer_cli_web-missing taskId 404s.
+    user = self.getCurrentUser()
+    if not submit._slicerCliAvailable():
+        raise RestException("slicer_cli_web is not installed", code=404)
+    scoped = submit._findScopedCliItem(taskId, user)
+    if not scoped:
+        raise RestException("Unknown taskId", code=404)
+    # translate_slicer_xml needs the strict <executable> parse (title/description
+    # + ordered params), which ``parse_cli`` does not carry, so it parses the XML
+    # itself; the scoped parse is consumed by runTask, not here.
+    cliItem, _parsedCli = scoped
+    return translate_slicer_xml(cliItem.xml, cliItem.name)
+
+
+# The single server-owned container every per-job output folder nests inside
+# (D13). One hierarchy entry per launch folder no matter how many jobs
+# accumulate, and one ADMIN-gated "clear this dataset's job history" gesture
+# (removing it recurses through the per-job folders, firing the reverse
+# cascade per job). The name is reserved: a pre-existing USER folder with this
+# name is never adopted -- reuse is gated on the server-owned marker, and an
+# unmarked name collision refuses the submission (409) instead.
+JOBS_CONTAINER_NAME = "volview-jobs"
+
+
+def _jobsContainerFolder(launchFolder, user):
+    """Create-or-reuse the launch folder's server-owned ``volview-jobs`` container.
+
+    Reuse requires the ``volviewJobOutputFolder`` marker -- the server-owned
+    identity stamped at creation. Adopting a user's pre-existing folder that
+    merely shares the reserved name would silently hide its contents from
+    launch manifests and turn the container-delete gesture into "delete
+    unrelated user data", so an unmarked collision refuses the submission with
+    a clear 409 instead. The marker also drives manifest exclusion (defense in
+    depth -- the container holds no files directly and owns no job, so the
+    reverse-cascade handler no-ops on it). Its ACL is the launch folder's
+    (copied by ``createFolder``): collaborators may see the container, but each
+    per-job folder inside keeps its submitter-only ACL.
+    """
+    existing = Folder().findOne(
+        {
+            "parentId": launchFolder["_id"],
+            "parentCollection": "folder",
+            "name": JOBS_CONTAINER_NAME,
+        }
+    )
+    if existing is not None:
+        if (existing.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY):
+            return existing
+        raise RestException(
+            "A folder named '%s' already exists here and is not a processing "
+            "jobs container; rename or remove it to run processing tasks"
+            % JOBS_CONTAINER_NAME,
+            code=409,
+        )
+    # reuseExisting keeps concurrent first submissions race-tolerant: both
+    # resolve to the one container, and both stamp the same marker.
+    container = Folder().createFolder(
+        parent=launchFolder,
+        name=JOBS_CONTAINER_NAME,
+        parentType="folder",
+        creator=user,
+        public=False,
+        reuseExisting=True,
+    )
+    if not container.get("meta", {}).get(JOB_OUTPUT_FOLDER_META_KEY):
+        container = Folder().setMetadata(
+            container, {JOB_OUTPUT_FOLDER_META_KEY: True}
+        )
+    return container
+
+
+def _createJobOutputFolder(launchFolder, user, submissionId):
+    """Create the job's private, server-owned output folder for a submission.
+
+    Lives inside the launch folder's ``volview-jobs`` container (D13). Every
+    declared output is forced into this folder, and it is the SOLE
+    output-correlation + ownership key. Two steps make it private:
+
+    * mark it ``volviewJobOutputFolder`` so the launch manifest excludes it and
+      its contents (job results take the job path only, never ordinary launch
+      data);
+    * REPLACE its ACL with a submitter-only ADMIN list. ``createFolder`` copies
+      the parent's ACL (``copyAccessPolicies``), which would otherwise leave
+      every launch-folder collaborator able to read the private results;
+      ``setAccessList(..., force=True, setPublic=False)`` strips that. Girder
+      system administrators keep their normal force access.
+    """
+    folder = Folder().createFolder(
+        parent=_jobsContainerFolder(launchFolder, user),
+        name="volview-job-%s" % submissionId,
+        parentType="folder",
+        creator=user,
+        public=False,
+        reuseExisting=False,
+    )
+    folder = Folder().setMetadata(folder, {JOB_OUTPUT_FOLDER_META_KEY: True})
+    Folder().setAccessList(
+        folder,
+        {"users": [{"id": user["_id"], "level": AccessType.ADMIN}], "groups": []},
+        save=True,
+        force=True,
+        setPublic=False,
+    )
+    return folder
+
+
+def _removeJobOutputFolder(folder):
+    """Best-effort removal of a pre-publication output folder (no job yet).
+
+    Only called when a submission failed BEFORE any job was created, so no
+    ownership record exists to drive the normal deletion cascade. An
+    already-missing folder is a no-op.
+    """
+    if not folder:
+        return
+    try:
+        Folder().remove(folder)
+    except Exception:
+        logger.exception(
+            "Failed to remove orphaned job output folder %s", folder.get("_id")
+        )
+
+
+def _requestCliItem(cliItem, initialJobFields):
+    """Copy a catalog CLI item and inject request-local initial job fields."""
+    requestItem = copy.copy(cliItem)
+    requestItem.item = copy.deepcopy(getattr(cliItem, "item", {}) or {})
+    meta = requestItem.item.setdefault("meta", {})
+    dockerParams = meta.setdefault("docker-params", {})
+    if not isinstance(dockerParams, dict):
+        raise ValidationException("CLI docker parameters are malformed")
+    catalogFields = dockerParams.get("girder_job_other_fields") or {}
+    if not isinstance(catalogFields, dict):
+        raise ValidationException("CLI initial job fields are malformed")
+    merged = dict(catalogFields)
+    merged.update(initialJobFields)
+    dockerParams["girder_job_other_fields"] = merged
+    return requestItem
+
+
+def _genDockerJob(cliItem, params, user, initialJobFields):
+    """Create the slicer_cli_web docker job for a CLI item and return its doc.
+
+    Isolated as the single live slicer_cli_web touch point so ``runTask`` (and
+    its tests) can drive job creation without the optional dependency.
+    """
+    from girder.models.token import Token
+    from slicer_cli_web.rest_slicer_cli import genHandlerToRunDockerCLI
+
+    # Scope-limit the container token to the data plane the CLI actually needs:
+    # read its inputs, write its outputs. Narrower than
+    # the ecosystem norm (slicer_cli_web mints full-auth tokens) without weakening
+    # Girder ACLs — the submitter's own read/write reach still bounds it. The token
+    # is passed to the CLI so it can read inputs and write outputs; it is NOT
+    # persisted on the job or used as an ownership/correlation key (outputs bind by
+    # their private parent folder, never by a token). It carries an explicit short
+    # TTL so it cannot outlive the job by months if it leaks.
+    token = Token().createToken(
+        user=user,
+        scope=[TokenScope.DATA_READ, TokenScope.DATA_WRITE],
+        days=_CONTAINER_TOKEN_TTL_DAYS,
+    )
+    requestItem = _requestCliItem(cliItem, initialJobFields)
+    handler = genHandlerToRunDockerCLI(requestItem)
+    # Inject the CLI's `girderApiUrl`/`girderToken` params so slicer_cli_web feeds
+    # the container its API URL + token (the b3 convention). slicer_cli_web only
+    # substitutes its GirderApiUrl()/GirderToken() runtime transforms when these
+    # keys are present in the params it processes (prepare_task
+    # `_add_optional_input_param` skips a param absent from args); the REST route
+    # would default them in, but the backend calls `subHandler` directly, so we
+    # supply them here. Empty -> slicer_cli_web substitutes the transforms, and
+    # GirderToken resolves to THIS scoped token, not a broader one. Without
+    # them a CLI that fetches its own inputs by id (`reference="_girder_id_"`, e.g.
+    # a multi-file DICOM series) has no way to reach Girder. Harmless for a CLI
+    # that declares neither -- slicer_cli_web ignores undeclared args.
+    params = dict(params)
+    params.setdefault("girderApiUrl", "")
+    params.setdefault("girderToken", "")
+    # Take a copy so the handler can mutate freely. Output correlation no longer
+    # depends on intercepting per-hook upload tokens: each output binds to the job
+    # by its private parent folder, so there is no token capture around this call.
+    job_obj = handler.subHandler(requestItem, copy.deepcopy(params), user, token)
+    job = job_obj.job if hasattr(job_obj, "job") else job_obj
+    return job
+
+
+def _prepareSubmissionFields(
+    submissionId, folder, taskId, values, outputSpecs, transientItemIds, outputFolder
+):
+    """Build every job association field before task publication.
+
+    Includes the job's private output-folder id (``_OUTPUT_FOLDER_ID_FIELD``) —
+    the sole output-correlation + ownership key — so the folder id is part of the
+    FIRST job insert, queryable before any worker upload can race in. The former
+    per-hook upload-token list is gone (folder ownership replaces it).
+
+    ``outputSpecs`` is the ``slicer_spec.parse_cli`` output descriptor list
+    ``runTask`` already parsed, threaded in rather than re-parsed here.
+    """
+    fields = {
+        _SUBMISSION_ID_FIELD: submissionId,
+        inputs._LAUNCH_FOLDER_FIELD: str(folder["_id"]),
+        inputs._TASK_ID_FIELD: str(taskId),
+        outputs._OUTPUT_SPECS_FIELD: outputSpecs,
+        outputs._OUTPUT_FOLDER_ID_FIELD: str(outputFolder["_id"]),
+        outputs._OUTPUTS_FIELD: {},
+        _SUBMITTED_PARAMETERS_FIELD: copy.deepcopy(values),
+    }
+    if transientItemIds:
+        fields[inputs._TRANSIENT_META_KEY] = list(transientItemIds)
+    return fields
+
+
+def _jobForSubmission(submissionId):
+    from girder_jobs.models.job import Job as JobModel
+
+    return JobModel().findOne({_SUBMISSION_ID_FIELD: submissionId})
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@boundHandler
+@autoDescribeRoute(
+    Description("Submit a processing task.")
+    .modelParam("folderId", model=Folder, level=AccessType.WRITE)
+    .param("taskId", "The task identifier.", paramType="path")
+    .jsonParam(
+        "body",
+        "Submission payload: { values: { paramName: ProcessingValue, ... } }",
+        paramType="body",
+        required=False,
+    )
+)
+def runTask(self, folder, taskId, body):
+    user = self.getCurrentUser()
+    values = (body or {}).get("values", {}) if isinstance(body, dict) else {}
+    if not isinstance(values, dict):
+        # Wire envelope: values is an object of parameter values; any other JSON
+        # shape is a malformed submission, not a job.
+        raise RestException("values must be an object of parameter values", code=400)
+
+    # Submit-boundary input validation: reject a crafted payload that carries
+    # reserved credentials or an undeclared output-folder param. Runs
+    # before any task lookup or work.
+    submit._rejectReservedSubmitParams(values)
+
+    if not submit._slicerCliAvailable():
+        raise RestException("slicer_cli_web is not installed", code=500)
+
+    scoped = submit._findScopedCliItem(taskId, user)
+    if not scoped:
+        raise RestException("Unknown taskId", code=404)
+    cliItem, parsedCli = scoped
+
+    # The whole submission parses the CLI XML exactly twice: ``_findScopedCliItem``
+    # already ran ``parse_cli`` (category + output-descriptor + param walk) and we
+    # reuse its ``outputs`` here; ``declared_params`` is the one remaining parse
+    # (the label-independent key/value declaration the grouped walk can't supply).
+    # Every downstream guard/translate step reads these threaded structures.
+    declared = declared_params(cliItem.xml)
+    outputSpecs = parsedCli["outputs"]
+
+    # Submit-boundary schema guard: reject any key the task's CLI does not declare
+    # as a parameter (a typo, a probe, or a client-authored output structure under
+    # an unknown name) with a 400 rather than silently ignoring it or 500-ing
+    # downstream. Screens the RAW client keys before autofill adds server-owned
+    # output structures. Then validate each declared key's VALUE against the
+    # CLI declaration (type / constraints range / enum membership) so a garbage
+    # value is a boundary 400 naming the parameter, not a later job failure.
+    submit._rejectUndeclaredSubmitParams(values, declared)
+    submit._validateDeclaredSubmitValues(values, declared)
+
+    # Auto-generate a deterministic output filename for any output param the user
+    # didn't fill (input file + CLI name + parameter name + extension). No longer
+    # uniquified via a folder scan: outputs bind to the job by its private output
+    # folder, not by name, so a duplicate filename can never cross results.
+    values = submit._autofillOutputs(dict(values), outputSpecs, cliItem.name)
+
+    # Mint the server submission id and create the job's PRIVATE output folder
+    # BEFORE translating params or publishing the task: every declared output is
+    # forced into that folder, and its id is part of the first job insert so it is
+    # queryable before any worker upload can race in.
+    submissionId = uuid.uuid4().hex
+    outputFolder = _createJobOutputFolder(folder, user, submissionId)
+
+    transientItemIds = []
+    try:
+        # Resolve each bound input once (own-scheme validation + per-user ACL
+        # re-check), forcing every declared output into the private output folder
+        # and rejecting a client-supplied folderRef. Reuse the authorized file
+        # documents for transient-item detection so each URI's ACL check runs once.
+        params, resolvedInputFiles = submit._translateValuesToSlicerParams(
+            values, user, outputFolder, declared
+        )
+        # Per-job input ownership: any staged (transient) input is COPIED into
+        # the job's private folder and the CLI params are rewritten onto the
+        # copies. The copies are recorded on the job so
+        # inputs._cleanupTransientOnJobDone deletes them at terminal state;
+        # the shared staged original is never a job dependency.
+        params, transientItemIds = inputs.copyStagedInputsIntoJobFolder(
+            params, resolvedInputFiles, user, outputFolder
+        )
+        # INFO carries only routing identity; the fully-translated CLI params
+        # (which can hold sensitive string values) stay at debug so a busy
+        # deployment's INFO log never accumulates per-job payloads.
+        logger.info(
+            "[volview_processing] runTask folder=%s task=%s submission=%s",
+            folder["_id"],
+            taskId,
+            submissionId,
+        )
+        logger.debug("[volview_processing] runTask params=%s", params)
+
+        initialFields = _prepareSubmissionFields(
+            submissionId,
+            folder,
+            taskId,
+            values,
+            outputSpecs,
+            transientItemIds,
+            outputFolder,
+        )
+        job_doc = _genDockerJob(cliItem, params, user, initialFields)
+    except Exception:
+        # run.delay can fail after Girder Worker's before_task_publish handler
+        # inserted the job. Resolve that ambiguity by the server-minted id.
+        job_doc = _jobForSubmission(submissionId)
+        if job_doc is None:
+            # No job exists (including a folderRef-rejection 400 before any work):
+            # remove the pre-publication output folder and staged inputs.
+            _removeJobOutputFolder(outputFolder)
+            inputs._removeTransientItems(transientItemIds)
+        else:
+            # A job WAS created: cancel it but RETAIN its ownership record so the
+            # normal terminal + deletion cascade cleans the output folder safely.
+            try:
+                from girder_jobs.models.job import Job as JobModel
+
+                JobModel().cancelJob(job_doc)
+            except Exception:
+                logger.exception(
+                    "Failed to cancel ambiguously published job %s",
+                    job_doc.get("_id"),
+                )
+        raise
+    return {"jobId": str(job_doc["_id"])}
+
+
+# ---------------------------------------------------------------------------
+# Job-addressed routes — status / results / cancel are keyed by job id
+# alone and gated by the job's OWN ACL. The launch folder is not part of a job's
+# identity, so these carry no ``folderId`` (they live on the folder-free
+# ``volview_processing`` resource below, not the folder tree the launch-context
+# routes use). getJob / getJobResults are READ-gated; cancel is WRITE-gated so a
+# read-only viewer who can see a job's status cannot cancel it.
+# ---------------------------------------------------------------------------
+
+
+def _loadJobForStatusProjection(jobId, user):
+    """Load a job for status projection, WITHOUT its log unless it is needed.
+
+    The client polls status every ~2s per live job and the job log grows
+    unbounded, so the common load excludes the log at the Mongo projection
+    level (``includeLog`` defaults False). Only the terminal-error projection
+    reads the log (a bounded tail in ``results._projectJobStatus``), and the
+    poller stops at terminal — so the log is reloaded at most for the final
+    error observation, never on the steady-state poll. The on-demand detail
+    route stays the full-log path.
+    """
+    from girder_jobs.models.job import Job as JobModel
+
+    job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
+    if results._projectJobState(job) == "error":
+        job = JobModel().load(
+            jobId,
+            user=user,
+            level=AccessType.READ,
+            exc=True,
+            includeLog=True,
+        )
+    return job
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Get job status.")
+    .param("jobId", "The job identifier.", paramType="path")
+    .produces(["application/json"])
+)
+def getJob(self, jobId):
+    user = self.getCurrentUser()
+    job = _loadJobForStatusProjection(jobId, user)
+    return results._projectJobStatus(job, user)
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Get detail-only job logs and submitted parameters.")
+    .param("jobId", "The job identifier.", paramType="path")
+    .produces(["application/json"])
+)
+def getJobHistoryDetail(self, jobId):
+    user = self.getCurrentUser()
+    from girder_jobs.models.job import Job as JobModel
+
+    job = JobModel().load(
+        jobId,
+        user=user,
+        level=AccessType.READ,
+        exc=True,
+        includeLog=True,
+    )
+    log = job.get("log") or []
+    if not isinstance(log, list):
+        log = [str(log)]
+    parameters = job.get(_SUBMITTED_PARAMETERS_FIELD) or {}
+    if not isinstance(parameters, dict):
+        parameters = {}
+    return {
+        "jobId": str(job["_id"]),
+        "log": [str(line) for line in log],
+        "parameters": parameters,
+    }
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@boundHandler
+@autoDescribeRoute(
+    Description(
+        "Delete a terminal job and its owned output folder + staged inputs."
+    )
+    .notes(
+        "A pending or running job returns 409 (cancel it first). A terminal job "
+        "is removed together with its private output folder and any remaining "
+        "staged inputs — deleting the job also deletes its results."
+    )
+    .param("jobId", "The job identifier.", paramType="path")
+    .errorResponse("Write access was denied for the job.", 403)
+    .errorResponse("The job is still running.", 409)
+)
+def deleteJob(self, jobId):
+    user = self.getCurrentUser()
+    from girder_jobs.models.job import Job as JobModel
+
+    model = JobModel()
+    job = model.load(jobId, user=user, level=AccessType.WRITE, exc=True)
+    # Product-specific 409 for a nonterminal job. The model.job.remove handler
+    # ALSO enforces this (protecting other JobModel.remove callers), but the
+    # route returns the typed product response rather than the model's raise.
+    if not results.isTerminalStatus(job.get("status")):
+        raise RestException(
+            "Job is still running; cancel it before deleting", code=409
+        )
+    # The ownership cascade (owned output folder + staged inputs) lives in the
+    # model.job.remove handler; this route adds no second cascade.
+    model.remove(job)
+    cherrypy.response.status = 204
+    return None
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_READ)
+@boundHandler
+@autoDescribeRoute(
+    Description("Get job results.")
+    .param("jobId", "The job identifier.", paramType="path")
+    .produces(["application/json"])
+)
+def getJobResults(self, jobId):
+    user = self.getCurrentUser()
+    from girder_jobs.models.job import Job as JobModel
+
+    job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
+    payload = results._jobResultsPayload(job, user)
+    if payload.get("code"):
+        cherrypy.response.status = 409
+        if payload["resultState"] == "waiting":
+            cherrypy.response.headers["Retry-After"] = "2"
+    return payload
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@boundHandler
+@autoDescribeRoute(
+    Description("Cancel a job.")
+    .notes(
+        "Best-effort: Girder only transitions an INACTIVE/QUEUED/RUNNING job to "
+        "CANCELED, so cancelling an already-terminal job is a no-op. The response "
+        "is the job's real projected status after the attempt -- never a "
+        "fabricated 'cancelled' -- and the client's poller converges on whatever "
+        "terminal state Girder ultimately reports."
+    )
+    .param("jobId", "The job identifier.", paramType="path")
+    .produces(["application/json"])
+    .errorResponse("Write access was denied for the job.", 403)
+)
+def cancelJob(self, jobId):
+    # WRITE-gated load: a read-only user (who can GET the status) is blocked here.
+    user = self.getCurrentUser()
+    from girder_jobs.models.job import Job as JobModel
+
+    jobModel = JobModel()
+    job = jobModel.load(jobId, user=user, level=AccessType.WRITE, exc=True)
+    try:
+        jobModel.cancelJob(job)
+    except ValidationException:
+        # Best-effort: Girder refuses a CANCELED transition from a terminal state,
+        # so an already-finished job simply cannot be cancelled. That is not an
+        # error here -- we fall through and report the job's real state below
+        # rather than fabricate a `cancelled` the poller would contradict.
+        pass
+    # Reload fresh and project the ACTUAL persisted state (best-effort): the
+    # client's poller converges on whatever Girder holds.
+    fresh = _loadJobForStatusProjection(jobId, user)
+    return results._projectJobStatus(fresh, user)
+
+
+@access.public(cookie=True, scope=TokenScope.DATA_WRITE)
+@boundHandler
+@autoDescribeRoute(
+    Description("Stage a parent-bound labelmap as a transient processing input.")
+    .notes(
+        "Accepts multipart labelmap bytes plus a neutral reference-image InputValue. "
+        "The backend validates and resolves that opaque relationship against durable "
+        "reference files before minting the staged URI. The created item is tagged "
+        "transient, deleted when its job reaches a terminal state, or swept if "
+        "never submitted."
+    )
+    .modelParam("folderId", model=Folder, level=AccessType.WRITE)
+    .param("file", "The labelmap bytes.", paramType="formData", dataType="file")
+    .jsonParam(
+        "descriptor",
+        "Typed labelmap resource descriptor.",
+        paramType="formData",
+        requireObject=True,
+    )
+    .errorResponse()
+)
+def stageInput(self, folder, file, descriptor):
+    user = self.getCurrentUser()
+    if set(descriptor) != {"type", "name", "referenceImage"}:
+        raise RestException("Malformed staged resource descriptor", code=400)
+    if descriptor.get("type") != "labelmap":
+        raise RestException("Staged resource type must be labelmap", code=400)
+    name = descriptor.get("name")
+    if not isinstance(name, str) or not name:
+        raise RestException("Staged resource name must not be empty", code=400)
+    referenceImage = descriptor.get("referenceImage")
+    if not isinstance(referenceImage, dict):
+        raise RestException("Staged labelmap requires a reference image", code=400)
+    if not set(referenceImage).issubset({"type", "format", "uris"}):
+        raise RestException("Malformed staged reference image", code=400)
+    if "format" in referenceImage and not isinstance(referenceImage["format"], str):
+        raise RestException("Malformed staged reference image format", code=400)
+    # Validate the reference image before writing bytes so a malformed, foreign,
+    # unauthorized, or transient reference never leaves an orphan upload (own-scheme
+    # + per-user ACL re-check; no lineage is tracked).
+    inputs.validateStagedReferenceImage(referenceImage, user)
+    # Age out any never-submitted orphans in this folder before adding another
+    # (job-end cleanup never sees an upload that was never submitted).
+    inputs._sweepOrphanTransients(folder)
+    fileDoc = inputs._streamMultipartFileIntoItem(folder, user, file, name)
+    try:
+        inputs._tagItemTransient(fileDoc, user)
+    except Exception:
+        # An untagged item is invisible to both the TTL sweep and the
+        # launch-manifest exclusion (each keys on the transient marker), so a
+        # tagging failure must not leave the just-finalized upload behind as
+        # apparent durable launch data.
+        inputs._removeTransientItems([fileDoc["itemId"]])
+        raise
+    # The backend mints the staged URI; the client constructs none.
+    return {"uris": [makeFileDownloadUrl(fileDoc)]}
+
+
+# ---------------------------------------------------------------------------
+# Route registration
+# ---------------------------------------------------------------------------
+
+
+class _JobResource(Resource):
+    """Folder-free REST surface for the job-addressed routes.
+
+    Mounted at ``/volview_processing`` (a sibling of ``/folder``, ``/item``),
+    this hosts status / results / cancel keyed by job id alone -- the launch
+    folder is not part of a job's identity. The launch-context routes
+    (tasks / spec / run / stage) stay on the folder tree because they genuinely
+    operate per-folder. The handlers are the same module-level ``@boundHandler``
+    functions; only their mount point differs.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.resourceName = "volview_processing"
+        self.route("GET", ("jobs", ":jobId"), getJob)
+        self.route("GET", ("jobs", ":jobId", "detail"), getJobHistoryDetail)
+        self.route("DELETE", ("jobs", ":jobId"), deleteJob)
+        self.route("GET", ("jobs", ":jobId", "results"), getJobResults)
+        self.route("POST", ("jobs", ":jobId", "cancel"), cancelJob)
+
+
+def addBackendRoutes(info):
+    ensureJobHistoryIndexes()
+    # Delete a job's transient staged inputs once it reaches a terminal state.
+    # Bound once at plugin load; fires for every job update but no-ops
+    # cheaply unless the job carries the transient marker.
+    events.bind(
+        "jobs.job.update.after",
+        "girder_volview.backend.routes",
+        inputs._cleanupTransientOnJobDone,
+    )
+    # Folder-owned job outputs: synchronously record each finalized output file's
+    # id onto the job that OWNS the file's private parent folder, keyed by output
+    # identifier, so result collection reads ids OFF the job. Fires for every
+    # upload but returns early unless the upload lands in a job's output folder
+    # under a declared identifier (fail closed).
+    events.bind(
+        "model.file.finalizeUpload.after",
+        "girder_volview.backend.outputs",
+        outputs._recordJobOutput,
+    )
+    # Ownership cascade: each job owns one private output folder + its staged
+    # inputs. This handler (model.job.remove, before the DB delete) refuses to
+    # remove a nonterminal owned job and cascade-deletes its owned resources — so
+    # our DELETE route, Girder's built-in job route, and any direct
+    # JobModel.remove caller all honor the same terminal guard and cleanup.
+    events.bind(
+        "model.job.remove",
+        "girder_volview.backend.outputs",
+        outputs._cascadeDeleteJobOwnedResources,
+    )
+    # Reverse ownership cascade (D13): deleting a job's output folder in the
+    # Girder hierarchy deletes the job record too (refusing for a live job),
+    # so folder deletion is a first-class "delete this job" gesture and no
+    # orphaned job rows accumulate. Removing the volview-jobs container
+    # recurses per job folder.
+    events.bind(
+        "model.folder.remove",
+        "girder_volview.backend.outputs",
+        outputs._cascadeDeleteFolderOwnedJob,
+    )
+    # REST pre-guard for the same invariant: Folder.remove cleans contents
+    # BEFORE model.folder.remove fires, so refuse a live job's folder (or a
+    # container holding one) before the delete handler touches anything.
+    events.bind(
+        "rest.delete.folder/:id.before",
+        "girder_volview.backend.outputs",
+        outputs._refuseLiveJobFolderRestDelete,
+    )
+    # The recorded id map is READ-exposed; the job's own ACL is the gate
+    # (otherFields + exposeFields, mirroring slicer_cli_web's slicerCLIBindings).
+    from girder_jobs.models.job import Job as JobModel
+
+    JobModel().exposeFields(level=AccessType.READ, fields={outputs._OUTPUTS_FIELD})
+    info["apiRoot"].folder.route(
+        "GET", (":folderId", "volview_processing", "tasks"), listTasks
+    )
+    # Reloaded-client job re-discovery: context-scoped like
+    # listTasks/runTask/stage (it takes a launch folder), NOT job-addressed like
+    # status/results/cancel. A reloaded client GETs this to re-find its jobs.
+    info["apiRoot"].folder.route(
+        "GET", (":folderId", "volview_processing", "jobs"), listJobHistory
+    )
+    info["apiRoot"].folder.route(
+        "POST", (":folderId", "volview_processing", "stage"), stageInput
+    )
+    info["apiRoot"].folder.route(
+        "GET",
+        (":folderId", "volview_processing", "tasks", ":taskId", "spec"),
+        getTaskSpec,
+    )
+    info["apiRoot"].folder.route(
+        "POST",
+        (":folderId", "volview_processing", "tasks", ":taskId", "run"),
+        runTask,
+    )
+    # Job-addressed routes live on a dedicated folder-free resource: a job's
+    # status/results/cancel are keyed by job id alone (gated by the job's own
+    # ACL), so they must NOT hang off the folder tree. Greenfield -- no
+    # folder-scoped compat shim for the old shape.
+    info["apiRoot"].volview_processing = _JobResource()

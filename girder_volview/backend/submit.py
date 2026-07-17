@@ -1,0 +1,650 @@
+"""Processing backend -- the slicer_cli_web submit bridge (the request half).
+
+This module owns everything between "the client picked a task and filled a form"
+and "hand slicer_cli_web the form-encoded params":
+
+- the slicer_cli_web catalog bridge (``_listCliItems`` / ``_findCliItem`` / ...);
+- radiology task scoping by ``<category>``, now reading the single
+  ``slicer_spec.parse_cli`` walk instead of a private duplicate XML parse;
+- the COSMETIC output-naming cluster (see its section note); and
+- the values → slicer_cli_web params translation (v1 = b3).
+
+The actual job creation (``_genDockerJob``) and the REST handlers live in
+``routes.py``; result correlation/collection live in ``outputs.py`` /
+``results.py``.
+"""
+
+from girder.exceptions import RestException
+
+from ..handles import parseFileHandle
+from .inputs import resolveInputUrisToFiles
+from .slicer_spec import (
+    parse_cli,
+    _bounds_to_region,
+    _json_number,
+    _RESERVED_INPUT_PARAMS,
+)
+
+
+# ---------------------------------------------------------------------------
+# slicer_cli_web bridge
+# ---------------------------------------------------------------------------
+
+
+def _slicerCliAvailable():
+    try:
+        import slicer_cli_web  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _listCliItems(user):
+    """Return CLIItem instances visible to the user."""
+    from slicer_cli_web.models import CLIItem
+
+    return list(CLIItem.findAllItems(user))
+
+
+def _findCliItem(taskId, user):
+    """Resolve a taskId to a CLIItem. taskId is the underlying Item._id."""
+    from slicer_cli_web.models import CLIItem
+
+    item = CLIItem.find(taskId, user)
+    return item
+
+
+def _cliItemToSummary(cliItem):
+    return {
+        "id": str(cliItem._id),
+        "title": cliItem.name,
+        "description": cliItem.item.get("description", ""),
+        "dockerImage": cliItem.image,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task scoping — filter the CLI catalog by <category>
+#
+# ``listTasks`` would otherwise return EVERY registered slicer_cli_web CLI, so a
+# radiology VolView's dropdown also lists the HistomicsTK *pathology* CLIs
+# (NucleiDetection, ColorDeconvolution, …) and volview_dicomrt. We keep only
+# CLIs whose Slicer XML ``<category>`` is in an allowed set (default radiology).
+# The radiology CLIs ship ``<category>Radiology</category>`` and the pathology
+# CLIs declare pathology categories (``HistomicsTK``), so the filter is
+# self-describing and needs no per-image allow-list — new radiology CLIs are
+# included automatically.
+#
+# The *server* is the boundary: ``getTaskSpec``/``runTask`` 404 a filtered-out
+# taskId exactly like an unknown id, so scoping can't be bypassed by guessing
+# an id. Fail-closed: a CLI with no/unknown ``<category>`` is excluded. The
+# ``<category>`` is read from the single ``slicer_spec.parse_cli`` walk.
+# ---------------------------------------------------------------------------
+
+# Default radiology category set (matched case-insensitively). The three shipped
+# radiology CLIs all declare ``<category>Radiology</category>``; Segmentation /
+# Filtering cover radiology operations a future CLI might categorize under and
+# are disjoint from the pathology CLIs' ``HistomicsTK`` category.
+_DEFAULT_ALLOWED_CATEGORIES = ("Radiology", "Segmentation", "Filtering")
+# Comma-separated env override for other deployments. Empty/unset falls back to
+# the default set, never to "unfiltered" (scoping is a locked requirement).
+_ALLOWED_CATEGORIES_ENV = "VOLVIEW_PROCESSING_ALLOWED_CATEGORIES"
+
+
+def _allowedCategories():
+    """Allowed CLI ``<category>`` names, lowercased, from env or the default set."""
+    import os
+
+    raw = os.environ.get(_ALLOWED_CATEGORIES_ENV) or ""
+    override = {c.strip().lower() for c in raw.split(",") if c.strip()}
+    return override or {c.lower() for c in _DEFAULT_ALLOWED_CATEGORIES}
+
+
+def _categoryInScope(category, allowed=None):
+    """Whether a parsed ``<category>`` is in the allowed scope (fail-closed).
+
+    Split out from :func:`_taskInScope` so ``_findScopedCliItem`` can decide scope
+    from the ``parse_cli`` result it ALREADY holds instead of re-parsing. A CLI
+    with no/unknown ``<category>`` is excluded so scoping can't be bypassed.
+    """
+    if allowed is None:
+        allowed = _allowedCategories()
+    return category is not None and category.lower() in allowed
+
+
+def _taskInScope(cliItem, allowed=None):
+    """Whether a CLI's ``<category>`` is in the allowed scope (fail-closed).
+
+    A CLI with no/unknown ``<category>`` is excluded so scoping can't be
+    bypassed. ``allowed`` (lowercased set) is passed in by ``_scopedCliItems``
+    to parse the env once per request; the single-task callers omit it. The
+    category is read from the single ``slicer_spec.parse_cli`` walk (a parse
+    failure yields ``category=None`` → out of scope).
+    """
+    try:
+        category = parse_cli(cliItem.xml)["category"]
+    except Exception:
+        return False
+    return _categoryInScope(category, allowed)
+
+
+def _scopedCliItems(user):
+    """CLIItems whose declared ``<category>`` is in the allowed scope.
+
+    The exact set ``listTasks`` advertises; the pathology CLIs never reach the
+    client.
+    """
+    allowed = _allowedCategories()
+    return [c for c in _listCliItems(user) if _taskInScope(c, allowed)]
+
+
+def _findScopedCliItem(taskId, user):
+    """Resolve a taskId to an in-scope ``(CLIItem, parsedCli)``, or None to 404.
+
+    Parses the CLI XML ONCE (``parse_cli``) and returns that parsed structure
+    alongside the item so the caller reuses it (``runTask`` reads
+    ``parsed["outputs"]`` off it instead of re-parsing). Out-of-scope tasks
+    resolve to ``None`` exactly like unknown ids, so a filtered pathology CLI
+    can't be reached by guessing its id.
+    """
+    cliItem = _findCliItem(taskId, user)
+    if not cliItem:
+        return None
+    try:
+        parsed = parse_cli(cliItem.xml)
+    except Exception:
+        return None
+    if not _categoryInScope(parsed["category"]):
+        return None
+    return cliItem, parsed
+
+
+# ---------------------------------------------------------------------------
+# Output naming — SERVER-OWNED
+#
+# Correlation is REFERENCE-BOUND, not name-matched: a job's outputs bind to it
+# by the slicer_cli_web output ``identifier`` + the file's private parent folder
+# recorded on the job (``outputs.py`` / ``results.py``), NEVER by filename. So the
+# name never crosses or loses a result.
+#
+# The name is NOT merely cosmetic, though: it becomes the output filename the
+# worker writes on the container host, so it MUST be a server-generated safe
+# basename and MUST NOT be client-controlled. A client-supplied output name like
+# ``../../../../etc/passwd`` would let a job's upload hook read a file outside the
+# worker volume (worker-host path traversal), so ``_autofillOutputs`` now ALWAYS
+# overwrites the name with the deterministic server-side one; the client's output
+# name (if any) is discarded, never honored. Nor is "server-generated" alone
+# sufficient: the input-derived component starts as a client-minted handle whose
+# percent-encoded name can decode to a traversal path (``%2F`` → ``/``), so every
+# component is collapsed to a single separator-free token via ``_safeNameToken``.
+# Every helper in this cluster (``_splitExt`` / ``_safeNameToken`` /
+# ``_candidateOutputName`` / ``_outputExtension`` / ``_firstInputBaseName``)
+# exists to build that safe default from server-side inputs (the CLI name, the
+# declared param name, the resolved input filename).
+# ---------------------------------------------------------------------------
+
+# Compound extensions we want to preserve as a single suffix.
+_COMPOUND_EXTENSIONS = (
+    ".nii.gz",
+    ".tar.gz",
+    ".mgh.gz",
+    ".hdr.gz",
+    ".mnc.gz",
+    ".iwi.cbor.zst",
+    ".iwi.cbor",
+)
+
+
+def _splitExt(name):
+    """Like os.path.splitext but recognizes radiology compound extensions.
+
+    Cosmetic only (see the section note): feeds the human-readable default
+    output filename; nothing load-bearing parses the result.
+    """
+    lower = name.lower()
+    for ext in _COMPOUND_EXTENSIONS:
+        if lower.endswith(ext):
+            return name[: -len(ext)], name[-len(ext) :]
+    dot = name.rfind(".")
+    if dot <= 0:
+        return name, ""
+    return name[:dot], name[dot:]
+
+
+def _defaultExtensionForOutput(out):
+    """Pick a sensible extension when the CLI didn't declare one (cosmetic only)."""
+    if out["tag"] == "image":
+        return ".nii.gz"
+    return ".dat"
+
+
+def _outputExtension(out):
+    """Return the first declared fileExtension, or a tag-based default.
+
+    Cosmetic only (see the section note): only shapes the default filename.
+    """
+    raw = out.get("fileExtensions") or ""
+    for ext in raw.split(","):
+        ext = ext.strip()
+        if ext:
+            return ext if ext.startswith(".") else "." + ext
+    return _defaultExtensionForOutput(out)
+
+
+def _safeNameToken(token, fallback):
+    """Collapse a name component to a single separator-free path token.
+
+    The composed output name becomes a worker-host filename (see the section
+    note), so every component MUST be a plain basename: an input-handle name
+    can decode to ``safe/../../etc/passwd`` (``%2F`` survives the handle
+    parser's pre-decode slash check), and a bare ``strip``-style cleanup would
+    pass the traversal through. Takes the last ``/``- or ``\\``-separated
+    segment, strips edge dots/spaces, and falls back when nothing safe is
+    left.
+    """
+    token = str(token or "").replace("\\", "/").rsplit("/", 1)[-1]
+    token = token.strip(". ")
+    return token or fallback
+
+
+def _candidateOutputName(inputBase, cliName, paramName, ext):
+    """Build a deterministic candidate name; uniquifying is a separate step.
+
+    Correlation binds by reference, never by this string, but the name IS the
+    worker-host output filename, so every component is collapsed to a safe
+    single token through the ``_safeNameToken`` chokepoint.
+    """
+    base = _safeNameToken(inputBase, "output")
+    cli = _safeNameToken(cliName, "task")
+    param = _safeNameToken(paramName, "out")
+    return f"{base}.{cli}.{param}{ext}"
+
+
+def _firstInputBaseName(values):
+    """Base name (no extension) of the first client-minted input, for naming.
+
+    Pure string parse of the input value's first uri through the handle
+    module (``handles.parseFileHandle`` recovers the original, unescaped
+    filename from the minted ``…/proxiable/<name>``; a foreign uri falls back
+    to its last path segment), so an auto-generated output reads
+    ``<inputname>.<cli>.<param><ext>``. No file load, no ACL — this only
+    seeds a (cosmetic) name; the real resolution/validation happens in
+    ``_translateValuesToSlicerParams``. Falls back to ``"output"`` when there
+    is no usable input uri.
+    """
+    for value in (values or {}).values():
+        if not isinstance(value, dict):
+            continue
+        uris = value.get("uris")
+        if not isinstance(uris, list) or not uris:
+            continue
+        first = uris[0]
+        if not isinstance(first, str) or not first:
+            continue
+        parsed = parseFileHandle(first)
+        name = parsed[1] if parsed else first.rsplit("/", 1)[-1]
+        # A parsed handle name is percent-DECODED and may contain slashes the
+        # handle grammar never saw; basename it before use (defense in depth —
+        # _candidateOutputName re-sanitizes every component regardless).
+        name = _safeNameToken(name, "")
+        base, _ = _splitExt(name)
+        base = base.strip(". ")
+        if base:
+            return base
+    return "output"
+
+
+def _autofillOutputs(values, outputs, cli_name):
+    """Generate the SERVER-OWNED name for every declared output param.
+
+    The output filename is server-owned, never client-selected (see the section
+    note): a client-supplied ``name`` such as ``../../../../etc/passwd`` would be
+    a worker-host path-traversal vector, so this ALWAYS overwrites ``name`` with
+    the deterministic server-side value and discards any client-supplied one. Any
+    OTHER keys on an existing output dict value are merged through; only ``name``
+    is normative and server-owned. Mutates and returns `values`; output param
+    values become `ProcessingOutputRequest`-style dicts: `{"name": "<candidate>",
+    ...}`.
+
+    The name is deterministic (`<input>.<cli>.<param><ext>`) and NOT uniquified:
+    the old check-then-use `while findOne(name)` folder scan was itself racy (two
+    concurrent submits both saw a name free and both took it) and is now needless —
+    outputs bind to the job by reference (`_recordJobOutput`), never by filename, so
+    two jobs writing the same name into one folder no longer cross results. The
+    ``outputs`` descriptor list is the ``slicer_spec.parse_cli`` walk ``runTask``
+    already ran, threaded in rather than re-parsed here.
+    """
+    if not outputs:
+        return values
+
+    inputBase = _firstInputBaseName(values)
+
+    for out in outputs:
+        existing = values.get(out["name"])
+        ext = _outputExtension(out)
+        candidate = _candidateOutputName(inputBase, cli_name, out["name"], ext)
+        new_value = {"name": candidate}
+        if isinstance(existing, dict):
+            # Merge any other client-supplied keys but never the name: the name is
+            # server-owned and overwritten unconditionally above.
+            new_value.update({k: v for k, v in existing.items() if k != "name"})
+        values[out["name"]] = new_value
+    return values
+
+
+# ---------------------------------------------------------------------------
+# Values → slicer_cli_web params (v1 = b3)
+#
+# A bound input arrives as the client-minted ``{type, format?, uris}`` value; the
+# backend resolves the URIs back to Girder file ids (own-scheme validation +
+# per-user ACL re-check) and forwards them to the CLI as a ``<string>`` param —
+# comma-joined for a multi-file volume (a DICOM series = N ids). ``slicer_cli_web``
+# injects ``girderApiUrl``/``girderToken`` (``prepare_task.py``/``cli_utils.py`` —
+# zero upstream change) and the CLI fetches + assembles: the CLI sees ids + a
+# token, never a URL, and the backend never touches pixels.
+# ---------------------------------------------------------------------------
+
+
+def _rejectReservedSubmitParams(values):
+    """Fail closed on a submission that smuggles reserved/undeclared params.
+
+    A separate submit-time defense from the spec-side drop
+    (``slicer_spec._RESERVED_INPUT_PARAMS``): the translator never *emits* these
+    to the client form, and this rejects a hand-crafted submit that tries to feed
+    them back in. Screens the RAW client-submitted keys —
+    before the backend derives any ``{param}_folder`` output-destination param — so
+    it never trips over the backend's own output plumbing. Rejects, never strips.
+
+    - ``girderApiUrl`` / ``girderToken``: ``slicer_cli_web``'s injected b3
+      credentials; a client value would try to redirect the CLI's girder client
+      or swap out its token.
+    - ``*_folder``: the backend synthesizes ``{param}_folder`` server-side
+      (``_translateValuesToSlicerParams``); the client never declares one, so any
+      ``*_folder`` in the raw submission is undeclared and rejected.
+    """
+    offending = sorted(
+        key
+        for key in (values or {})
+        if key in _RESERVED_INPUT_PARAMS or key.endswith("_folder")
+    )
+    if offending:
+        raise RestException(
+            "Reserved parameter(s) may not be submitted: %s" % ", ".join(offending),
+            code=400,
+        )
+
+
+def _rejectUndeclaredSubmitParams(values, declared):
+    """Fail closed (400) on a submission key the CLI does not declare.
+
+    The submit boundary accepts only keys the task's Slicer CLI actually declares
+    as parameters. A hand-crafted payload smuggling an undeclared key (a typo, a
+    probe, or a client-authored output structure under an unknown name) is rejected
+    here with a clear 400 rather than silently ignored or 500-ing downstream. The
+    reserved-param screen (``_rejectReservedSubmitParams``) runs first, so
+    ``girderApiUrl``/``girderToken`` and ``*_folder`` keys take that typed rejection
+    even though the CLI declares the credential params in its XML.
+
+    ``declared`` is the ``slicer_spec.declared_params`` mapping ``runTask`` parsed
+    once; its key set is exactly the accepted names.
+    """
+    offending = sorted(key for key in (values or {}) if key not in declared)
+    if offending:
+        raise RestException(
+            "Undeclared parameter(s) may not be submitted: %s" % ", ".join(offending),
+            code=400,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Declared-value validation — fail fast at the submit boundary (M-01 residual)
+#
+# The key guards above establish WHICH names may be submitted; this cluster
+# validates the VALUES against the same parsed CLI declaration that emits the
+# task spec (``slicer_spec.declared_params`` — the label-independent walk, so a
+# param the spec walk drops for lacking a <label> section is still value-checked).
+# Without it a garbage value is stringified and forwarded, the job is created,
+# and the error surfaces later as an opaque job failure instead of a boundary
+# 400 naming the parameter.
+#
+# The checks branch by DECLARATION, unlike ``_translateValuesToSlicerParams``
+# which branches by value shape — that difference is the point: the confirmed
+# M-01 repro was a declared OUTPUT submitted as an object carrying ``uris``,
+# which shape-matched the translator's input branch, lost its output-folder
+# param, and died downstream. Declaration-driven validation rejects it here.
+#
+# Deliberately NOT validated here (documented skips):
+# - ``region`` values — checked+converted in ``_translateValuesToSlicerParams``
+#   instead: a ``<region>`` param carries the client's LPS bounds box, which the
+#   translator inverts to Slicer's RAS center+radius grammar and fails closed
+#   (400) on a non-six-finite value. Value validation and coordinate conversion
+#   are the same step, so it lives at translation, not here.
+# - ``item`` / ``directory`` / ``multi`` values — no scalar wire contract to
+#   check; the translator stringifies them and the CLI validates.
+# - constraint ranges on vector ELEMENTS — Slicer applies <constraints>
+#   per-element, but no shipped radiology CLI declares vector constraints;
+#   scalars carry the range check.
+# - uri strings inside input objects — ``resolveInputUrisToFiles`` owns scheme
+#   validation and the per-user ACL re-check.
+# ---------------------------------------------------------------------------
+
+
+def _isNumber(value):
+    # bool is an int subclass in Python; a submitted true/false is never a number.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _isIntegral(value):
+    # JSON carries no int/float distinction, so an integer param accepts 5.0.
+    return _isNumber(value) and float(value).is_integer()
+
+
+def _rangeProblem(value, constraints):
+    minimum = constraints.get("min")
+    maximum = constraints.get("max")
+    if minimum is not None and value < minimum:
+        return "is below the declared minimum %s" % _formatNumber(minimum)
+    if maximum is not None and value > maximum:
+        return "is above the declared maximum %s" % _formatNumber(maximum)
+    return None
+
+
+def _formatNumber(value):
+    # Render an integral float as its int form (50.0 -> "50") in 400 messages.
+    # ``slicer_spec._json_number`` is the same integral-float canonicalization
+    # (bools and genuine fractionals pass through untouched), so delegate to it.
+    return str(_json_number(value))
+
+
+def _vectorElements(value):
+    """The two wire forms the translator forwards: a JSON list, or a pre-joined
+    comma-separated string. Anything else is not a vector."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return value.split(",")
+    return None
+
+
+def _numberElementOk(element, integral):
+    if isinstance(element, str):
+        try:
+            element = float(element.strip())
+        except ValueError:
+            return False
+    if not _isNumber(element) or element != element:  # non-number or NaN
+        return False
+    return not integral or float(element).is_integer()
+
+
+def _scalarProblem(decl, value):
+    """Type/range/enum mismatch for a declared scalar, or None when it passes."""
+    widget = decl["widget"]
+    if widget == "boolean":
+        return None if isinstance(value, bool) else "expected a boolean"
+    if widget == "string":
+        return None if isinstance(value, str) else "expected a string"
+    if widget == "number":
+        if not _isNumber(value):
+            return "expected a number"
+        if decl["tag"] == "integer" and not _isIntegral(value):
+            return "expected an integer"
+        return _rangeProblem(value, decl["constraints"])
+    if widget in ("number-enumeration", "string-enumeration"):
+        options = decl["options"] or []
+        typed_ok = (
+            isinstance(value, str)
+            if widget == "string-enumeration"
+            else _isNumber(value)
+        )
+        if not typed_ok or value not in options:
+            return "expected one of: %s" % ", ".join(
+                _formatNumber(o) for o in options
+            )
+        return None
+    if widget in ("number-vector", "string-vector"):
+        elements = _vectorElements(value)
+        if elements is None:
+            return "expected a list (or comma-separated string) of elements"
+        if widget == "string-vector":
+            bad = not all(isinstance(e, str) for e in elements)
+            kind = "a string"
+        else:
+            integral = decl["tag"] == "integer-vector"
+            bad = not all(_numberElementOk(e, integral) for e in elements)
+            kind = "an integer" if integral else "a number"
+        if bad:
+            return "expected every vector element to be %s" % kind
+        return None
+    return None
+
+
+def _submitValueProblem(decl, value):
+    """Why a submitted value mismatches its CLI declaration, or None."""
+    # Declared image/file OUTPUTS are server-composed: the name is overwritten by
+    # ``_autofillOutputs`` and a folderRef is rejected in translation, but an
+    # object carrying ``uris`` would merge through autofill and shape-match the
+    # translator's INPUT branch (the confirmed M-01 repro) — reject it here.
+    if decl["channel"] == "output" and decl["tag"] in ("image", "file"):
+        if isinstance(value, dict) and "uris" in value:
+            return "output values may not carry uris (outputs are server-composed)"
+        return None
+    # Declared image/file INPUTS are the client-minted {type, format?, uris}
+    # objects; anything else would be stringified and forwarded as garbage.
+    if decl["widget"] in ("image", "file"):
+        uris = value.get("uris") if isinstance(value, dict) else None
+        if not isinstance(uris, list) or not all(isinstance(u, str) for u in uris):
+            return "expected an input object with a uris list"
+        return None
+    return _scalarProblem(decl, value)
+
+
+def _validateDeclaredSubmitValues(values, declared):
+    """Fail closed (400) on a declared param whose submitted VALUE mismatches the
+    CLI's declaration (type / <constraints> range / enumeration membership).
+
+    Runs after ``_rejectUndeclaredSubmitParams`` (every surviving key is declared)
+    and before ``_autofillOutputs``/translation, so a mismatch is a boundary 400
+    naming the parameter instead of a stringified value failing inside the job.
+    ``None`` values are skipped exactly as the translator skips them. ``declared``
+    is the ``slicer_spec.declared_params`` mapping ``runTask`` parsed once.
+    """
+    problems = sorted(
+        "%s (%s)" % (name, problem)
+        for name, value in (values or {}).items()
+        if value is not None and name in declared
+        for problem in (_submitValueProblem(declared[name], value),)
+        if problem
+    )
+    if problems:
+        raise RestException(
+            "Invalid value for declared parameter(s): %s" % "; ".join(problems),
+            code=400,
+        )
+
+
+def _regionParamToSlicerValue(paramName, value):
+    """Convert a ``<region>`` param's client bounds box to Slicer's wire grammar.
+
+    A ``<region>`` CLI param expects ``cx,cy,cz,rx,ry,rz`` (center + radius, RAS),
+    but the client mints the value as an LPS min/max box; ``_bounds_to_region``
+    inverts the frame. Fail closed: a value that is not six finite numbers is a
+    boundary 400 naming the parameter rather than a malformed region string
+    silently reaching the CLI (which would process a wrong spatial region).
+    """
+    region = _bounds_to_region(value)
+    if region is None:
+        raise RestException(
+            "Invalid value for region parameter '%s': expected a bounds box of "
+            "six finite numbers" % paramName,
+            code=400,
+        )
+    return ",".join(str(v) for v in region)
+
+
+def _translateValuesToSlicerParams(values, user, outputFolder, declared=None):
+    """Translate a VolView values payload to slicer_cli_web's form-encoded params.
+
+    - Client-minted input values ``{type, format?, uris}`` → resolved Girder file
+      ids, forwarded as a ``<string>`` param (comma-joined for N files; b3).
+    - ``ProcessingOutputRequest`` outputs → name + name_folder, FORCED into the
+      job's server-created private output folder (``outputFolder``). Output
+      location is server-owned: a client-supplied ``folderRef`` is rejected, so a
+      submission can never redirect a job's outputs out of its own folder.
+    - ``<region>`` params (identified by their declaration, not value shape) →
+      the client's LPS bounds box inverted to Slicer's RAS center+radius grammar
+      (``_regionParamToSlicerValue``); a malformed box is a boundary 400.
+    - Scalars / plain strings / lists → their string form.
+
+    ``declared`` is the ``slicer_spec.declared_params`` mapping ``runTask`` parsed
+    once; it drives the region-param branch by DECLARED tag (a ``region`` value is
+    an ordinary list on the wire, so it cannot be recognized by shape). Callers
+    that pass no ``declared`` mapping carry no region params.
+
+    Returns the translated params and the authorized input file documents. The
+    caller reuses those documents for transient-item detection, so each URI's
+    ACL check is performed exactly once per submission.
+    """
+    declared = declared or {}
+    params = {}
+    resolvedInputFiles = {}
+    for paramName, value in (values or {}).items():
+        if value is None:
+            continue
+        if declared.get(paramName, {}).get("tag") == "region":
+            # A <region> param: invert the client's LPS box to Slicer's RAS
+            # center+radius grammar (fail closed on a malformed box). Handled by
+            # declaration before the generic list branch, which would otherwise
+            # comma-join the raw min/max box in the wrong convention.
+            params[paramName] = _regionParamToSlicerValue(paramName, value)
+        elif isinstance(value, bool):
+            params[paramName] = "true" if value else "false"
+        elif isinstance(value, (int, float)):
+            params[paramName] = str(value)
+        elif isinstance(value, dict) and "uris" in value:
+            # A bound input: resolve the backend's own URIs back to file ids
+            # (strict validation + ACL re-check) and forward the ids (b3).
+            fileDocs = resolveInputUrisToFiles(value.get("uris"), user)
+            resolvedInputFiles[paramName] = fileDocs
+            params[paramName] = ",".join(str(fileDoc["_id"]) for fileDoc in fileDocs)
+        elif isinstance(value, dict) and "name" in value:
+            # ProcessingOutputRequest. Output location is SERVER-OWNED: every
+            # declared output is forced into the job's private output folder. A
+            # client-supplied folderRef is rejected (not honored, not stripped) so
+            # a job's outputs can never be redirected out of its own folder --
+            # which is also the only output-correlation key.
+            if "folderRef" in value:
+                raise RestException(
+                    "Output folderRef is server-owned and may not be submitted",
+                    code=400,
+                )
+            params[paramName] = value["name"]
+            params[f"{paramName}_folder"] = str(outputFolder["_id"])
+        elif isinstance(value, str):
+            params[paramName] = value
+        elif isinstance(value, list):
+            params[paramName] = ",".join(str(v) for v in value)
+        else:
+            params[paramName] = str(value)
+    return params, resolvedInputFiles
