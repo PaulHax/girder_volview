@@ -15,7 +15,8 @@ This example:
 4. Creates a polygon annotation tracing the body outline
 5. Uploads session back to Girder
 
-Supported formats: DICOM series, NIfTI (.nii, .nii.gz), NRRD, MHA/MHD, PNG, JPEG, TIFF, etc.
+Supported formats: DICOM series, NIfTI (.nii, .nii.gz), NRRD, MHA/MHD, PNG,
+JPEG, TIFF, etc.
 
 Usage:
     # For a single file item (NIfTI, PNG, etc.)

@@ -237,7 +237,8 @@ io:
 
 ### Automatic Layers and Segment Groups by File Name
 
-When loading multiple non DICOM image files, VolView can automatically associate related images based on file naming patterns.
+When loading multiple image files, VolView can automatically associate related images based on file naming patterns.
+For non-DICOM base images, the matching rule is based on the base filename prefix.
 The extension must appear anywhere in the filename after splitting by dots,
 and the filename must start with the same prefix as the base image (everything before the first dot).
 
@@ -267,6 +268,10 @@ For example, `myImage.layer.nii` is layered on top of `myImage.nii`. Defaults to
 io:
   layerExtension: "layer" # "layer" is the default
 ```
+
+For DICOM-specific association rules, explicit `segmentGroups` /
+`parentToLayers` session manifest examples, and notes on using DICOM tags versus
+file names, see [Loading Layers and Segmentations](./docs/loading_layers_and_segmentations.md).
 
 ### Default Window Level
 
@@ -320,44 +325,55 @@ proxy_assetstores = False
 - GET folder/:id/volview_config/:name -> download JSON with VolView config properties
 - Deprecated: GET item/:id/volview/datasets -> download all files in item except the `*.volview.zip`
 
-## Example Saving Roundtrip flow
+## Save / restore round-trip
+
+Every launch URL carries query params the client acts on:
+
+- `urls=` — where the client fetches the scene to load. A **specific pick** (an
+  item, or a checked/filter set) loads exactly what was picked, fresh. A **bare
+  folder open** resumes the folder's newest `session.volview.zip`, or the folder's
+  raw images if none has been saved yet.
+- `save=` — the ordinary session-zip save route: item-scoped
+  (`POST item/:id/volview`) for a single item, or folder-scoped
+  (`POST folder/:id/volview?metadata=…`) for a checked or filter set, where
+  `metadata` records that set under the saved session's `linkedResources`.
+- `config=` — the folder's VolView config (`GET folder/:id/volview_config/:name`).
+
+On Save, the plugin writes a `session.volview.zip` and returns a **`resumeUrl`**
+(`item/:id/volview`, pointing at the session item). The client repoints BOTH its
+`save=` and `urls=` at that `resumeUrl`, so:
+
+- repeated saves land in the **same** session item (save-in-place — a checked or
+  filter save no longer proliferates a new folder session on every click), and
+- a browser refresh (F5) reloads the saved session directly from that item.
 
 ### Open Item
 
-1. User clicks Open in VolView for Item - Plugin checks if `*volview.zip` file exists in Item, finds none:
-   Opens VolView with file download url `item/:id/volview/datasets`
-1. VolView opens, fetches from `item/:id/volview/datasets`, receives zip of all files in Item except files ending in `*volview.zip`
-1. In VolView, User clicks the Save button - VolView POSTs session.volview.zip to `item/:id/volview`
-1. girder_volview plugin saves new session.volview.zip in Item.
-1. User clicks Open in VolView for Item - Plugin finds a `*volview.zip` in the Item. Opens VolView with file download URL pointing to `item/:id/volview`
-1. VolView opens, fetches from `item/:id/volview`, receives most recently created `*volview.zip` file in Item.
-
-VolView creates a new session.volview.zip file in the Girder Item every time the Save button is clicked.
+1. User clicks Open in VolView for an item. If the item has no `session.volview.zip`, VolView opens on the item's raw files; if it has one, VolView opens on the newest `session.volview.zip`.
+1. User clicks Save. VolView POSTs `session.volview.zip` to `item/:id/volview`; the plugin stores it in the item and returns the `resumeUrl`.
+1. Refresh, or re-open, resumes that saved session from the same item.
 
 ### Open Checked
 
-1. User checks a set of items or folders. Clicks "Open Checked in VolView".
-1. Browser client updates the `lastOpened` metadata on a checked item/folder metadata with the current time.
-1. Browser opens VolView with file download url pointing to `GET folder/:id/volview?items=[...ids]&folders=[...ids]`. That endpoint returns a JSON file with URLs to Girder files.
-1. VolView save URL is pointing to `PUT folder/:id/volview?metadata={items: [...ids], folders: [...ids]}`. `metadata` parameter matches the checked set in the Girder file browser. User clicks save. `session.volview.zip` item is created in the folder with a `linkedResources` metadata key holding the folder and item IDs. If user checked a session.volview.zip item, then `items` points to an existing session.volview.zip. The new session.volview.zip takes the `linkedResources` of the older session.volview.zip.
-1. If user clicks refresh in VolView, the `GET folder/:id/volview?items=[...ids]&folders=[...ids]` end point is hit again. If a session.volview.zip is in the `items` parameter, the plugin reads the volview.zip's `linkedResources` and searches for a newer session.volview.zips with matching `linkedResources` and returns that if found.
-1. If user checks a new set of folders or items that does not include a session.volview.zip item, the `GET folder/:id/volview` endpoint does not pick a session.volview.zip with matching `linkedResources` as `lastOpened` metadata on one of the checked items/folders is newer than the matching session.volview.zip. This allows opening of images with a clean slate.
+1. User checks a set of items/folders and clicks "Open Checked in VolView". VolView opens fresh on exactly the checked set (`GET folder/:id/volview?items=[…]&folders=[…]`).
+1. User clicks Save. A `session.volview.zip` is created in the folder with the checked set recorded under `linkedResources`; the plugin returns its `resumeUrl`, which the client repoints `save=`/`urls=` at.
+1. Subsequent saves update that same session item; refresh reloads it.
 
 ### Open Filter-Linked Session (Grouped DICOM Row)
 
-Filter-linked sessions use `linkedResources.filter` (a metadata-key/value dict like `{"meta.dicom.StudyInstanceUID": "..."}`) in place of explicit item/folder IDs. The grouped DICOM row opener produces these.
+Filter-linked sessions record a `linkedResources.filter` (a metadata key/value dict like `{"meta.dicom.StudyInstanceUID": "..."}`) in place of explicit item/folder IDs. The grouped DICOM row opener produces these.
 
-1. User clicks Open on a grouped row. Browser opens VolView with a manifest URL of `GET folder/:id/volview?filters={...}`. The endpoint returns the newest session.volview.zip whose `linkedResources.filter` is *equal* to the row's filter (strict set-equality on the filter list); if none exists, it returns the raw DICOM files matching the filter.
-1. User clicks Save. A new session.volview.zip is created in the folder with the row's filter recorded under `linkedResources.filter`.
-1. User clicks refresh in VolView. The same `?filters={...}` URL is hit again and now resolves to the just-saved session (newest matching by `getTouchedTime`, which honors `meta.lastOpened`).
-1. User checks an older filter-linked session item in the file browser and clicks "Open Checked in VolView". Client bumps `lastOpened` on the checked item, then opens VolView with `?items=<id>`. The endpoint reads the checked session's `linkedResources.filter` and returns the newest matching session — which is the just-touched older one. Subsequent saves create newer matching sessions; refresh picks them up via the same touched-time rule. This is what makes "go back in history" and "refresh after save" use the same code path.
+1. User clicks Open on a grouped row. VolView opens fresh on the raw DICOM files matching the filter (`GET folder/:id/volview?filters={…}`).
+1. User clicks Save. A `session.volview.zip` is created in the folder with the row's filter recorded under `linkedResources.filter`; the client repoints to its `resumeUrl`.
+1. Refresh reloads the saved session; subsequent saves update the same item.
 
 ## Development
 
 Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
 
-In the `docker-compose.override.yml` file, add some `volumes` pointing to this girder plugin and optionally
-a VolView repo checkout. Example:
+In the `docker-compose.override.yml` file, add volumes pointing to this Girder
+plugin. If you want to use a local VolView build, mount that build's `dist`
+directory over the packaged VolView `dist` directory. Example:
 
 ```yaml
 services:
@@ -365,7 +381,7 @@ services:
     volumes:
       - ../with-dive-volview/provision.divevolview.yaml:/opt/digital_slide_archive/devops/dsa/provision.yaml
       - ../../../girder_volview:/opt/girder_volview
-      - ../../../../VolView:/opt/volview-package
+      - ../../../../VolView/dist:/opt/girder_volview/girder_volview/web_client/node_modules/volview/dist:ro
 ```
 
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
@@ -380,23 +396,25 @@ shell:
 
 ### Develop VolView client
 
-To develop with a local VolView build, change the directory the Webpack copy plugin pulls from in `girder_volview/web_client/webpack.helper.js`:
+To develop with a local VolView build, build VolView from source and mount or
+copy its `dist` directory over `girder_volview/web_client/node_modules/volview/dist`
+before rebuilding the Girder web client. The checked-in Webpack helper always
+copies from the packaged `node_modules/volview/dist` path, so local development
+does not require changing `webpack.helper.js`.
 
-```js
-new CopyWebpackPlugin([
-  {
-    from: "/opt/volview-package/dist", // Point to your mount of VolView
-    to: config.output.path,
-    toType: "dir",
-  },
-]);
-```
-
-Then build VolView from source with these env vars:
+Then build VolView from source:
 
 ```sh
-VITE_ENABLE_REMOTE_SAVE=true npm run build
+npm run build
 ```
+
+Processing (the Analysis/Jobs tab) and remote session save ship in every build
+and no longer need build-time env flags — `VITE_ENABLE_PROCESSING`,
+`VITE_ENABLE_REMOTE_SAVE`, and `VITE_PROCESSING_ALLOWED_ORIGINS` were removed.
+What the deployed client is allowed to contact is decided at runtime by a
+same-origin egress gate; a same-origin deployment (such as DSA) needs no
+configuration, and cross-origin targets are never allowed.
+See [Processing provider & remote-save origin gate](docs/processing_origin_gate.md).
 
 ### Updating the VolView Client Version
 
