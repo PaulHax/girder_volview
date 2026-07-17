@@ -1,0 +1,462 @@
+"""Server-fixture coverage for the D13 reverse cascade (folder delete -> job delete).
+
+Each job's private output folder nests inside the launch folder's single
+``volview-jobs`` container, and the deletion cascade is bidirectional:
+
+* removing a job's output folder in the Girder hierarchy removes the job record
+  (which sweeps its staged inputs via the existing job-side cascade);
+* removing the whole container recurses per job folder — the ADMIN-gated
+  "clear this dataset's job history" gesture;
+* a LIVE (non-terminal) job blocks the gesture: the REST route 409s BEFORE any
+  contents are cleaned, and the model-level handler refuses too (shell guard for
+  direct model callers);
+* the job-side cascade (VolView's DELETE) still works — the in-progress marker
+  stops the reverse handler from re-entering ``JobModel.remove`` mid-delete.
+
+Like the other route tests this needs a live pytest-girder server + Mongo; the
+module self-skips when the test Mongo is unreachable.
+"""
+
+import io
+from conftest import mongo_reachable
+import uuid
+
+import pytest
+
+from girder_volview.backend import inputs, outputs, routes
+from girder_volview.utils import JOB_OUTPUT_FOLDER_META_KEY
+
+
+# ---------------------------------------------------------------------------
+# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
+# ---------------------------------------------------------------------------
+
+
+pytestmark = pytest.mark.skipif(
+    not mongo_reachable(),
+    reason="needs a live pytest-girder Mongo (like test_job_deletion_routes); "
+    "unavailable offline",
+)
+
+
+# ---------------------------------------------------------------------------
+# Users / launch folder
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def owner(db):
+    from girder.models.user import User
+
+    return User().createUser(
+        login="cascadeowner",
+        password="password123",
+        firstName="C",
+        lastName="O",
+        email="cascadeowner@example.com",
+        admin=False,
+    )
+
+
+@pytest.fixture
+def launchFolder(fsAssetstore, owner):
+    from girder.models.folder import Folder
+
+    return Folder().createFolder(
+        owner, "launch", parentType="user", creator=owner, public=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers (mirroring test_job_deletion_routes)
+# ---------------------------------------------------------------------------
+
+
+def _reload(job):
+    from girder_jobs.models.job import Job
+
+    return Job().load(job["_id"], force=True)
+
+
+def _drive(job, status):
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    paths = {
+        JobStatus.QUEUED: [JobStatus.QUEUED],
+        JobStatus.RUNNING: [JobStatus.QUEUED, JobStatus.RUNNING],
+        JobStatus.SUCCESS: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCESS],
+        JobStatus.ERROR: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.ERROR],
+    }
+    for s in paths.get(status, []):
+        job = Job().updateJob(_reload(job), status=s)
+    return _reload(job)
+
+
+def _makeOwnedJob(owner, launchFolder, status=None):
+    """A job owning a REAL private output folder (created exactly as runTask does)."""
+    from girder_jobs.models.job import Job
+
+    outputFolder = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    job = Job().createJob(
+        title="t",
+        type="volview_test",
+        user=owner,
+        public=False,
+        otherFields={
+            outputs._OUTPUT_FOLDER_ID_FIELD: str(outputFolder["_id"]),
+            inputs._LAUNCH_FOLDER_FIELD: str(launchFolder["_id"]),
+            outputs._OUTPUTS_FIELD: {},
+        },
+    )
+    if status is not None:
+        job = _drive(job, status)
+    return _reload(job), outputFolder
+
+
+def _stageTransientInput(owner, launchFolder, job):
+    """Stage a transient input item and record it on the (already terminal) job."""
+    from girder.models.item import Item
+    from girder.models.upload import Upload
+    from girder_jobs.models.job import Job
+
+    fileDoc = Upload().uploadFromFile(
+        io.BytesIO(b"seg-bytes"),
+        size=9,
+        name="staged.seg.nrrd",
+        parentType="folder",
+        parent=launchFolder,
+        user=owner,
+    )
+    itemId = fileDoc["itemId"]
+    Item().setMetadata(
+        Item().load(itemId, force=True), {inputs._TRANSIENT_META_KEY: True}
+    )
+    Job().collection.update_one(
+        {"_id": job["_id"]},
+        {"$set": {inputs._TRANSIENT_META_KEY: [str(itemId)]}},
+    )
+    return itemId
+
+
+def _folderExists(folderId):
+    from girder.models.folder import Folder
+
+    return Folder().load(folderId, force=True, exc=False) is not None
+
+
+def _jobExists(jobId):
+    from girder_jobs.models.job import Job
+
+    return Job().load(jobId, force=True, exc=False) is not None
+
+
+def _itemExists(itemId):
+    from girder.models.item import Item
+
+    return Item().load(itemId, force=True, exc=False) is not None
+
+
+def _container(launchFolder):
+    from girder.models.folder import Folder
+
+    return Folder().findOne(
+        {
+            "parentId": launchFolder["_id"],
+            "parentCollection": "folder",
+            "name": routes.JOBS_CONTAINER_NAME,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# 1. Output folders nest inside ONE marked volview-jobs container
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_output_folders_nest_in_one_marked_container(server, owner, launchFolder):
+    from girder.constants import AccessType
+    from girder.models.folder import Folder
+
+    a = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    b = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+
+    container = _container(launchFolder)
+    assert container is not None
+    # Both job folders share the single container.
+    assert str(a["parentId"]) == str(container["_id"])
+    assert str(b["parentId"]) == str(container["_id"])
+    # The container carries the manifest-exclusion marker (defense in depth)...
+    assert container["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True
+    # ...and the per-job privacy properties are unchanged by the nesting: marked,
+    # non-public, ACL replaced with a submitter-only ADMIN list.
+    for jobFolder in (a, b):
+        assert jobFolder["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True
+        assert jobFolder["public"] is False
+        access = Folder().getFullAccessList(jobFolder)
+        assert access["groups"] == []
+        assert [(u["id"], u["level"]) for u in access["users"]] == [
+            (owner["_id"], AccessType.ADMIN)
+        ]
+
+
+# ---------------------------------------------------------------------------
+# 2. Deleting a terminal job's folder deletes the job (+ sweeps staged inputs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_folder_delete_removes_job_and_staged_inputs(server, owner, launchFolder):
+    from girder.models.folder import Folder
+    from girder_jobs.constants import JobStatus
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.SUCCESS)
+    stagedItemId = _stageTransientInput(owner, launchFolder, job)
+
+    Folder().remove(Folder().load(outputFolder["_id"], force=True))
+
+    assert not _folderExists(outputFolder["_id"])
+    assert not _jobExists(job["_id"])
+    # The reverse cascade routed through JobModel.remove, so the job-side sweep
+    # still cleaned the staged input.
+    assert not _itemExists(stagedItemId)
+
+
+# ---------------------------------------------------------------------------
+# 3. Deleting the container clears every (terminal) job — and survives jobs
+#    whose folder was already gone
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_container_delete_clears_all_jobs(server, owner, launchFolder):
+    from girder.models.folder import Folder
+    from girder_jobs.constants import JobStatus
+
+    jobA, folderA = _makeOwnedJob(owner, launchFolder, status=JobStatus.SUCCESS)
+    jobB, folderB = _makeOwnedJob(owner, launchFolder, status=JobStatus.ERROR)
+    container = _container(launchFolder)
+
+    Folder().remove(Folder().load(container["_id"], force=True))
+
+    assert not _folderExists(container["_id"])
+    assert not _folderExists(folderA["_id"])
+    assert not _folderExists(folderB["_id"])
+    assert not _jobExists(jobA["_id"])
+    assert not _jobExists(jobB["_id"])
+    # The launch folder itself is untouched.
+    assert _folderExists(launchFolder["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 4. A LIVE job's folder cannot be deleted — model-level (shell) guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_folder_model_remove_is_blocked(server, owner, launchFolder):
+    from girder.exceptions import RestException
+    from girder.models.folder import Folder
+    from girder_jobs.constants import JobStatus
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+
+    with pytest.raises(RestException):
+        Folder().remove(Folder().load(outputFolder["_id"], force=True))
+
+    assert _folderExists(outputFolder["_id"])
+    assert _jobExists(job["_id"])
+    # Ownership is intact, so the normal delete works once the job settles.
+    assert _reload(job)[outputs._OUTPUT_FOLDER_ID_FIELD] == str(outputFolder["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 5. REST pre-guard: a live job 409s BEFORE any contents are cleaned — for the
+#    job folder itself and for the container holding it
+# ---------------------------------------------------------------------------
+
+
+def _restDeleteFolder(server, folderId, user):
+    return server.request(
+        path="/folder/%s" % folderId,
+        method="DELETE",
+        user=user,
+        isJson=False,
+        exception=True,
+    )
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_folder_rest_delete_409s_before_cleaning(
+    server, owner, launchFolder
+):
+    from girder.models.item import Item
+    from girder_jobs.constants import JobStatus
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+    # A partial output already inside the live job's folder: the REST guard runs
+    # before Folder.remove's clean(), so it must survive the refused delete.
+    partial = Item().createItem("partial.nrrd", owner, outputFolder)
+
+    for target in (outputFolder["_id"], _container(launchFolder)["_id"]):
+        resp = _restDeleteFolder(server, target, owner)
+        assert resp.output_status.startswith(b"409")
+        assert _folderExists(outputFolder["_id"])
+        assert _jobExists(job["_id"])
+        assert _itemExists(partial["_id"])
+
+    # Once the job settles, the same REST delete goes through and takes the job.
+    from girder_jobs.models.job import Job
+
+    Job().updateJob(_reload(job), status=JobStatus.SUCCESS)
+    resp = _restDeleteFolder(server, outputFolder["_id"], owner)
+    assert resp.output_status.startswith(b"200")
+    assert not _folderExists(outputFolder["_id"])
+    assert not _jobExists(job["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 6. The job-side cascade (VolView delete) still works — no re-entry loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_job_delete_still_cascades_folder_without_reentry(
+    server, owner, launchFolder
+):
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.SUCCESS)
+
+    # Direct model removal exercises the same handler chain as the DELETE route.
+    Job().remove(_reload(job))
+
+    assert not _jobExists(job["_id"])
+    assert not _folderExists(outputFolder["_id"])
+    # The guard set drained (no leaked in-progress markers).
+    assert outputs._CASCADING_FOLDER_IDS == set()
+
+# ---------------------------------------------------------------------------
+# 7. Ownership is authoritative: an UNMARKED ancestor delete (the launch
+#    folder) and a stripped marker still 409 while a nested job is live
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_blocks_ancestor_folder_rest_delete(server, owner, launchFolder):
+    from girder.models.item import Item
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+    partial = Item().createItem("partial.nrrd", owner, outputFolder)
+
+    # The launch folder carries no marker, yet deleting it would recursively
+    # clean the live job's folder -- the preflight must refuse the whole gesture.
+    resp = _restDeleteFolder(server, launchFolder["_id"], owner)
+    assert resp.output_status.startswith(b"409")
+    assert _folderExists(launchFolder["_id"])
+    assert _folderExists(outputFolder["_id"])
+    assert _itemExists(partial["_id"])
+
+    # Once the job settles, the ancestor delete goes through and takes the job
+    # with it (reverse cascade fires per nested job folder).
+    Job().updateJob(_reload(job), status=JobStatus.SUCCESS)
+    resp = _restDeleteFolder(server, launchFolder["_id"], owner)
+    assert resp.output_status.startswith(b"200")
+    assert not _folderExists(launchFolder["_id"])
+    assert not _jobExists(job["_id"])
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_guard_survives_stripped_marker(server, owner, launchFolder):
+    from girder.models.folder import Folder
+    from girder_jobs.constants import JobStatus
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+    folder = Folder().load(outputFolder["_id"], force=True)
+    folder.get("meta", {}).pop(JOB_OUTPUT_FOLDER_META_KEY, None)
+    Folder().save(folder)
+
+    # Persisted job ownership, not folder metadata, drives the guard.
+    resp = _restDeleteFolder(server, outputFolder["_id"], owner)
+    assert resp.output_status.startswith(b"409")
+    assert _folderExists(outputFolder["_id"])
+    assert _jobExists(job["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 8. A failed job removal restores the ownership pointer (retryable delete)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_failed_job_remove_restores_folder_pointer(
+    server, owner, launchFolder, monkeypatch
+):
+    from girder.models.folder import Folder
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.SUCCESS)
+
+    def _boom(self, doc):
+        raise RuntimeError("simulated job-remove failure")
+
+    monkeypatch.setattr(Job, "remove", _boom)
+    with pytest.raises(RuntimeError):
+        Folder().remove(Folder().load(outputFolder["_id"], force=True))
+    monkeypatch.undo()
+
+    # The folder shell is retained AND the job still points at it, so a retry
+    # can re-associate and complete the delete.
+    assert _folderExists(outputFolder["_id"])
+    assert _jobExists(job["_id"])
+    assert _reload(job)[outputs._OUTPUT_FOLDER_ID_FIELD] == str(outputFolder["_id"])
+
+    Folder().remove(Folder().load(outputFolder["_id"], force=True))
+    assert not _folderExists(outputFolder["_id"])
+    assert not _jobExists(job["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 9. A user's pre-existing volview-jobs folder is never adopted as the container
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_unmarked_user_folder_named_volview_jobs_is_not_adopted(
+    server, owner, launchFolder
+):
+    from girder.exceptions import RestException
+    from girder.models.folder import Folder
+    from girder.models.item import Item
+
+    userFolder = Folder().createFolder(
+        launchFolder,
+        routes.JOBS_CONTAINER_NAME,
+        parentType="folder",
+        creator=owner,
+        public=False,
+    )
+    keepsake = Item().createItem("precious.nrrd", owner, userFolder)
+
+    with pytest.raises(RestException) as excinfo:
+        routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    assert excinfo.value.code == 409
+
+    # The user's folder is untouched: no adoption marker, contents intact.
+    reloaded = Folder().load(userFolder["_id"], force=True)
+    assert not (reloaded.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
+    assert _itemExists(keepsake["_id"])
+
+
+@pytest.mark.plugin("volview")
+def test_marked_container_is_reused(server, owner, launchFolder):
+    a = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    b = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    assert str(a["parentId"]) == str(b["parentId"])
+    container = _container(launchFolder)
+    assert container["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True

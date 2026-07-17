@@ -1,0 +1,516 @@
+"""Save / load / restore round-trip for the restored ordinary session zip.
+
+Exercises ``backend/launch.py`` through the live cherrypy pipeline against the
+save/restore design:
+
+- **specific picks resume matching work:** checked items and filters reopen the
+  newest matching ``session.volview.zip`` while unrelated sessions are ignored;
+- **changed checked resources load fresh:** a matching session older than the
+  selected resource is not substituted;
+- **a bare folder-open resumes** the folder's newest ``session.volview.zip`` (by
+  ``created``), else its raw loadable images;
+- **a filter-gesture save is excluded from the bare open** (it carries
+  ``meta.linkedResources.filter``) while a plain save is resumed (OPEN-7);
+- **a save returns a ``resumeUrl``** the client repoints its ``urls=`` at, and
+  that url round-trips the saved zip byte-for-byte.
+"""
+
+import datetime
+import io
+import json
+import re
+from conftest import mongo_reachable
+
+import pytest
+
+from girder_volview.utils import makeFileDownloadUrl
+
+
+pytestmark = pytest.mark.skipif(
+    not mongo_reachable(),
+    reason="needs a live pytest-girder Mongo; unavailable offline",
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures + helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def owner(db):
+    from girder.models.user import User
+
+    return User().createUser(
+        login="saveowner",
+        password="password123",
+        firstName="A",
+        lastName="B",
+        email="saveowner@example.com",
+        admin=False,
+    )
+
+
+@pytest.fixture
+def folder(fsAssetstore, owner):
+    from girder.models.folder import Folder
+
+    return Folder().createFolder(
+        owner, "launch", parentType="user", creator=owner, public=False
+    )
+
+
+def _uploadFile(folder, user, name, data=b"pixels", meta=None):
+    """Upload one file into ``folder``; return (item, file)."""
+    from girder.models.item import Item
+    from girder.models.upload import Upload
+
+    fileDoc = Upload().uploadFromFile(
+        io.BytesIO(data),
+        size=len(data),
+        name=name,
+        parentType="folder",
+        parent=folder,
+        user=user,
+    )
+    item = Item().load(fileDoc["itemId"], force=True)
+    if meta:
+        item = Item().setMetadata(item, meta)
+    return item, fileDoc
+
+
+def _ageFile(fileDoc, hours):
+    """Backdate a file's ``created`` so newest-by-created is deterministic."""
+    from girder.models.file import File
+
+    fileDoc["created"] = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
+    return File().save(fileDoc)
+
+
+def _folderManifest(server, folder, user, params=None, **kwargs):
+    return server.request(
+        path="/folder/%s/volview" % folder["_id"],
+        method="GET",
+        user=user,
+        params=params or {},
+        isJson=True,
+        **kwargs,
+    )
+
+
+def _itemManifest(server, item, user, **kwargs):
+    return server.request(
+        path="/item/%s/volview" % item["_id"],
+        method="GET",
+        user=user,
+        isJson=True,
+        **kwargs,
+    )
+
+
+def _resourceNames(resp):
+    return [resource["name"] for resource in resp.json["resources"]]
+
+
+def _saveToFolder(server, folder, user, zipBytes, linkedResources):
+    return server.request(
+        path="/folder/%s/volview" % folder["_id"],
+        method="POST",
+        user=user,
+        body=zipBytes,
+        type="application/zip",
+        isJson=True,
+        exception=True,
+        params={"metadata": json.dumps({"linkedResources": linkedResources})},
+    )
+
+
+def _saveToItem(server, item, user, zipBytes):
+    return server.request(
+        path="/item/%s/volview" % item["_id"],
+        method="POST",
+        user=user,
+        body=zipBytes,
+        type="application/zip",
+        isJson=True,
+        exception=True,
+    )
+
+
+def _downloadBytes(fileDoc):
+    from girder.models.file import File
+
+    return b"".join(File().download(fileDoc, headers=False)())
+
+
+# ---------------------------------------------------------------------------
+# 1. Specific picks resume matching sessions and ignore unrelated sessions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_single_raw_item_opens_fresh_not_session(server, owner, folder):
+    rawItem, rawFile = _uploadFile(folder, owner, "brain.nrrd")
+    # A saved session exists in the same folder; the single-item open ignores it.
+    _uploadFile(folder, owner, "session.volview.zip", data=b"zip")
+
+    resp = _itemManifest(server, rawItem, owner, exception=True)
+    names = _resourceNames(resp)
+    assert "brain.nrrd" in names
+    assert not any(n.endswith(".volview.zip") for n in names)
+
+
+@pytest.mark.plugin("volview")
+def test_checked_pick_ignores_unrelated_session(server, owner, folder):
+    itemA, fileA = _uploadFile(folder, owner, "a.nrrd")
+    itemB, fileB = _uploadFile(folder, owner, "b.nrrd")
+    # A session without matching linkedResources must not be substituted.
+    _uploadFile(folder, owner, "session.volview.zip", data=b"zip")
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"items": "%s,%s" % (itemA["_id"], itemB["_id"]), "folders": ""},
+        exception=True,
+    )
+    names = _resourceNames(resp)
+    assert set(names) == {"a.nrrd", "b.nrrd", "config.json"}
+    assert not any(n.endswith(".volview.zip") for n in names)
+
+
+@pytest.mark.plugin("volview")
+def test_filter_pick_ignores_unrelated_session(server, owner, folder):
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    _uploadFile(folder, owner, "drop.nrrd", meta={"pick": "no"})
+    _uploadFile(folder, owner, "session.volview.zip", data=b"zip")
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"filters": json.dumps([{"meta.pick": "yes"}])},
+        exception=True,
+    )
+    names = _resourceNames(resp)
+    assert "keep.nrrd" in names
+    assert "drop.nrrd" not in names
+    assert not any(n.endswith(".volview.zip") for n in names)
+
+
+@pytest.mark.plugin("volview")
+def test_checked_pick_resumes_newest_matching_session(server, owner, folder):
+    itemA, _ = _uploadFile(folder, owner, "a.nrrd")
+    itemB, _ = _uploadFile(folder, owner, "b.nrrd")
+    linked = {
+        "items": [str(itemA["_id"]), str(itemB["_id"])],
+        "folders": [],
+    }
+    _saveToFolder(server, folder, owner, b"annotated", linked)
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"items": ",".join(linked["items"]), "folders": ""},
+        exception=True,
+    )
+
+    names = _resourceNames(resp)
+    assert names.count("session.volview.zip") == 1
+    assert "a.nrrd" not in names
+    assert "b.nrrd" not in names
+
+
+@pytest.mark.plugin("volview")
+def test_filter_pick_resumes_newest_matching_session(server, owner, folder):
+    filter_ = [{"meta.pick": "yes"}]
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    _uploadFile(folder, owner, "drop.nrrd", meta={"pick": "no"})
+    _saveToFolder(server, folder, owner, b"annotated", {"filter": filter_})
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"filters": json.dumps(filter_)},
+        exception=True,
+    )
+
+    names = _resourceNames(resp)
+    assert len([name for name in names if name.endswith(".volview.zip")]) == 1
+    assert "keep.nrrd" not in names
+
+
+@pytest.mark.plugin("volview")
+def test_checked_session_item_opens_saved_state(server, owner, folder):
+    item, _ = _uploadFile(folder, owner, "brain.nrrd")
+    saveResp = _saveToFolder(
+        server,
+        folder,
+        owner,
+        b"annotated",
+        {"items": [str(item["_id"])], "folders": []},
+    )
+    sessionId = _itemIdFromResume(saveResp.json["resumeUrl"])
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"items": sessionId, "folders": ""},
+        exception=True,
+    )
+
+    names = _resourceNames(resp)
+    assert names.count("session.volview.zip") == 1
+    assert "brain.nrrd" not in names
+
+
+@pytest.mark.plugin("volview")
+def test_checked_pick_loads_fresh_when_selected_resource_is_newer(
+    server, owner, folder
+):
+    from girder.models.item import Item
+
+    item, _ = _uploadFile(folder, owner, "brain.nrrd")
+    linked = {"items": [str(item["_id"])], "folders": []}
+    _saveToFolder(server, folder, owner, b"annotated", linked)
+
+    item["updated"] = datetime.datetime.utcnow() + datetime.timedelta(seconds=1)
+    Item().save(item)
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"items": str(item["_id"]), "folders": ""},
+        exception=True,
+    )
+
+    names = _resourceNames(resp)
+    assert "brain.nrrd" in names
+    assert not any(name.endswith(".volview.zip") for name in names)
+
+
+@pytest.mark.plugin("volview")
+def test_filters_must_be_json_object_or_array(server, owner, folder):
+    resp = _folderManifest(
+        server, folder, owner, params={"filters": json.dumps("not-a-dict")}
+    )
+    assert resp.output_status.startswith(b"400")
+
+
+@pytest.mark.plugin("volview")
+def test_checked_session_save_rebases_so_newest_resumes(server, owner, folder):
+    # H-1: a save made from a *checked-session* open must rebase its
+    # linkedResources back onto the originals, so re-checking the original images
+    # resumes the NEWEST save -- not the older session it was opened from.
+    from girder.models.item import Item
+
+    itemA, _ = _uploadFile(folder, owner, "a.nrrd")
+    itemB, _ = _uploadFile(folder, owner, "b.nrrd")
+    originals = {"items": [str(itemA["_id"]), str(itemB["_id"])], "folders": []}
+
+    # First save from the checked originals -> session S1.
+    r1 = _saveToFolder(server, folder, owner, b"first-save", originals)
+    s1Id = _itemIdFromResume(r1.json["resumeUrl"])
+
+    # Reopen S1 (check the session item) and save again. The client stamps
+    # linkedResources={items:[S1]}; the rebase rewrites it to the originals.
+    r2 = _saveToFolder(
+        server, folder, owner, b"second-save", {"items": [s1Id], "folders": []}
+    )
+    s2Id = _itemIdFromResume(r2.json["resumeUrl"])
+    assert s2Id != s1Id
+
+    # Re-check the original images: the newest matching session (S2) resumes.
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"items": ",".join(originals["items"]), "folders": ""},
+        exception=True,
+    )
+    assert _resourceNames(resp).count("session.volview.zip") == 1
+
+    s2File = next(iter(Item().childFiles(Item().load(s2Id, force=True))))
+    sessionUrls = [
+        r["url"]
+        for r in resp.json["resources"]
+        if r["name"] == "session.volview.zip"
+    ]
+    assert sessionUrls == [makeFileDownloadUrl(s2File)]
+
+
+@pytest.mark.plugin("volview")
+def test_explicit_selection_wins_over_filters(server, owner, folder):
+    # M-1: a request carrying BOTH items= and filters= loads the checked items;
+    # the filter set does not silently override the explicit selection.
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    checked, _ = _uploadFile(folder, owner, "checked.nrrd", meta={"pick": "no"})
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={
+            "items": str(checked["_id"]),
+            "folders": "",
+            "filters": json.dumps([{"meta.pick": "yes"}]),
+        },
+        exception=True,
+    )
+    names = _resourceNames(resp)
+    assert "checked.nrrd" in names
+    assert "keep.nrrd" not in names
+
+
+# ---------------------------------------------------------------------------
+# 2. Bare folder-open resumes the newest session, else raw images
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_bare_folder_resumes_newest_session(server, owner, folder):
+    _uploadFile(folder, owner, "brain.nrrd")
+    _, older = _uploadFile(folder, owner, "older.volview.zip", data=b"old")
+    _, newer = _uploadFile(folder, owner, "newer.volview.zip", data=b"new")
+    _ageFile(older, hours=2)
+
+    resp = _folderManifest(server, folder, owner, exception=True)
+    names = _resourceNames(resp)
+    # The newest session opens through; not the older one, not the raw image.
+    assert "newer.volview.zip" in names
+    assert "older.volview.zip" not in names
+    assert "brain.nrrd" not in names
+
+
+@pytest.mark.plugin("volview")
+def test_bare_folder_without_session_opens_raw_images(server, owner, folder):
+    _, rawFile = _uploadFile(folder, owner, "brain.nrrd")
+
+    resp = _folderManifest(server, folder, owner, exception=True)
+    names = _resourceNames(resp)
+    assert "brain.nrrd" in names
+    assert any(
+        r["name"] == "brain.nrrd" and r["url"] == makeFileDownloadUrl(rawFile)
+        for r in resp.json["resources"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. OPEN-7: a filter-gesture save is excluded from the bare open; a plain
+#    save is resumed. Exercises the write-side stamp <-> read-side exclusion.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_filter_save_excluded_from_bare_open_plain_save_resumed(server, owner, folder):
+    # Plain save first, then a NEWER filter-gesture save (stamps
+    # meta.linkedResources.filter, named session.<...>.volview.zip). The bare
+    # open must exclude the newer filter save and resume the older plain save --
+    # proving the write-side stamp / read-side exclusion, not recency, decides.
+    _saveToFolder(server, folder, owner, b"plain-zip", {"items": [], "folders": []})
+    _saveToFolder(
+        server, folder, owner, b"filter-zip", {"filter": [{"meta.pick": "yes"}]}
+    )
+
+    resp = _folderManifest(server, folder, owner, exception=True)
+    session_names = [n for n in _resourceNames(resp) if n.endswith(".volview.zip")]
+    assert session_names == ["session.volview.zip"]
+
+
+# ---------------------------------------------------------------------------
+# 4. Save returns a resumeUrl; the item save stuffs the zip into the item.
+# ---------------------------------------------------------------------------
+
+
+def _itemIdFromResume(resumeUrl):
+    match = re.search(r"/item/([^/]+)/volview$", resumeUrl or "")
+    assert match, "resumeUrl is not an item/:id/volview URL: %r" % resumeUrl
+    return match.group(1)
+
+
+@pytest.mark.plugin("volview")
+def test_folder_save_returns_only_resume_url_and_creates_session_item(
+    server, owner, folder
+):
+    from girder.models.item import Item
+
+    resp = _saveToFolder(
+        server, folder, owner, b"scene-zip", {"items": [], "folders": []}
+    )
+    # The response is a SINGLE field -- the save/load URL -- and carries NO girder
+    # ids: the VolView client stays opaque to the item id.
+    assert set(resp.json.keys()) == {"resumeUrl"}
+    newItemId = _itemIdFromResume(resp.json["resumeUrl"])
+    item = Item().load(newItemId, force=True)
+    assert item["name"] == "session.volview.zip"
+
+
+@pytest.mark.plugin("volview")
+def test_item_save_returns_resume_url_pointing_at_the_item(server, owner, folder):
+    rawItem, _ = _uploadFile(folder, owner, "brain.nrrd")
+    resp = _saveToItem(server, rawItem, owner, b"scene-zip")
+    assert set(resp.json.keys()) == {"resumeUrl"}
+    assert resp.json["resumeUrl"] == "/api/v1/item/%s/volview" % rawItem["_id"]
+
+
+@pytest.mark.plugin("volview")
+def test_repeat_save_into_resumed_item_stays_one_folder_session(server, owner, folder):
+    # The first folder-scoped save mints ONE session item; the client then
+    # repoints save= at that item, so the next save is item-scoped INTO the same
+    # item -- no second folder session item (no proliferation, save-in-place).
+    from girder.models.item import Item
+
+    _uploadFile(folder, owner, "brain.nrrd")  # a raw image so the folder isn't empty
+    r1 = _saveToFolder(server, folder, owner, b"first", {"items": [], "folders": []})
+    sessionId = _itemIdFromResume(r1.json["resumeUrl"])
+    assert _sessionItemCount(folder) == 1
+
+    # Second save -> the resumed item's URL (item-scoped), as the client repoints.
+    sessionItem = Item().load(sessionId, force=True)
+    r2 = _saveToItem(server, sessionItem, owner, b"second")
+    assert r2.json["resumeUrl"] == "/api/v1/item/%s/volview" % sessionId
+
+    # Still exactly one folder session item; the item now holds both saves and
+    # the newest opens through on reload.
+    assert _sessionItemCount(folder) == 1
+    resp = _itemManifest(server, sessionItem, owner, exception=True)
+    assert any(n.endswith(".volview.zip") for n in _resourceNames(resp))
+
+
+def _sessionItemCount(folder):
+    from girder.models.folder import Folder
+
+    return sum(
+        1 for it in Folder().childItems(folder) if it["name"].endswith(".volview.zip")
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Resume round-trip: the resumeUrl reloads the saved zip, byte-identical.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.plugin("volview")
+def test_resume_url_round_trips_saved_zip_byte_identical(server, owner, folder):
+    from girder.models.file import File
+    from girder.models.item import Item
+
+    payload = b"the-exact-scene-bytes"
+    saveResp = _saveToFolder(
+        server, folder, owner, payload, {"items": [], "folders": []}
+    )
+    sessionItem = Item().load(_itemIdFromResume(saveResp.json["resumeUrl"]), force=True)
+
+    # GET the resumeUrl -> the manifest names the saved session zip.
+    resp = _itemManifest(server, sessionItem, owner, exception=True)
+    names = _resourceNames(resp)
+    assert any(n.endswith(".volview.zip") for n in names)
+
+    # The stored bytes match what was posted.
+    stored = list(Item().childFiles(sessionItem))
+    assert len(stored) == 1
+    assert _downloadBytes(File().load(stored[0]["_id"], force=True)) == payload
