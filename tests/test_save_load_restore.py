@@ -3,10 +3,11 @@
 Exercises ``backend/launch.py`` through the live cherrypy pipeline against the
 save/restore design:
 
-- **specific picks resume matching work:** checked items and filters reopen the
-  newest matching ``session.volview.zip`` while unrelated sessions are ignored;
-- **changed checked resources load fresh:** a matching session older than the
-  selected resource is not substituted;
+- **raw checked picks ALWAYS open fresh** (main parity): checking images is the
+  "start fresh" gesture; no saved session is ever substituted;
+- **a checked session item opens through to exactly that session**
+  (back-in-history), and **a filter gesture resumes its newest matching
+  session** while unrelated sessions are ignored;
 - **a bare folder-open resumes** the folder's newest ``session.volview.zip`` (by
   ``created``), else its raw loadable images;
 - **a filter-gesture save is excluded from the bare open** (it carries
@@ -199,7 +200,9 @@ def test_filter_pick_ignores_unrelated_session(server, owner, folder):
 
 
 @pytest.mark.plugin("volview")
-def test_checked_pick_resumes_newest_matching_session(server, owner, folder):
+def test_checked_raw_pick_opens_fresh_despite_matching_session(server, owner, folder):
+    # Main parity: checking raw images is the "start fresh" gesture. Even a
+    # NEWER save recorded against exactly this selection set is not substituted.
     itemA, _ = _uploadFile(folder, owner, "a.nrrd")
     itemB, _ = _uploadFile(folder, owner, "b.nrrd")
     linked = {
@@ -217,9 +220,9 @@ def test_checked_pick_resumes_newest_matching_session(server, owner, folder):
     )
 
     names = _resourceNames(resp)
-    assert names.count("session.volview.zip") == 1
-    assert "a.nrrd" not in names
-    assert "b.nrrd" not in names
+    assert "a.nrrd" in names
+    assert "b.nrrd" in names
+    assert not any(".volview.zip" in n for n in names)
 
 
 @pytest.mark.plugin("volview")
@@ -267,30 +270,63 @@ def test_checked_session_item_opens_saved_state(server, owner, folder):
     assert "brain.nrrd" not in names
 
 
-@pytest.mark.plugin("volview")
-def test_checked_pick_loads_fresh_when_selected_resource_is_newer(
-    server, owner, folder
-):
+def _sessionDownloadUrls(resp):
+    return [
+        r["url"] for r in resp.json["resources"] if ".volview.zip" in r["name"]
+    ]
+
+
+def _itemFileDownloadUrl(itemId):
     from girder.models.item import Item
 
-    item, _ = _uploadFile(folder, owner, "brain.nrrd")
-    linked = {"items": [str(item["_id"])], "folders": []}
-    _saveToFolder(server, folder, owner, b"annotated", linked)
+    fileDoc = next(iter(Item().childFiles(Item().load(itemId, force=True))))
+    return makeFileDownloadUrl(fileDoc)
 
-    item["updated"] = datetime.datetime.utcnow() + datetime.timedelta(seconds=1)
-    Item().save(item)
+
+@pytest.mark.plugin("volview")
+def test_checked_old_session_opens_that_session_not_newest(server, owner, folder):
+    # Back-in-history: with several saves accumulated in the folder, explicitly
+    # checking an OLD session item opens through to exactly that session -- it
+    # is never re-matched to the newest sibling save.
+    itemA, _ = _uploadFile(folder, owner, "a.nrrd")
+    linked = {"items": [str(itemA["_id"])], "folders": []}
+    r1 = _saveToFolder(server, folder, owner, b"first", linked)
+    s1Id = _itemIdFromResume(r1.json["resumeUrl"])
+    r2 = _saveToFolder(server, folder, owner, b"second", linked)
+    s2Id = _itemIdFromResume(r2.json["resumeUrl"])
+    assert s2Id != s1Id
 
     resp = _folderManifest(
-        server,
-        folder,
-        owner,
-        params={"items": str(item["_id"]), "folders": ""},
-        exception=True,
+        server, folder, owner, params={"items": s1Id, "folders": ""}, exception=True
     )
+    assert _sessionDownloadUrls(resp) == [_itemFileDownloadUrl(s1Id)]
 
-    names = _resourceNames(resp)
-    assert "brain.nrrd" in names
-    assert not any(name.endswith(".volview.zip") for name in names)
+
+@pytest.mark.plugin("volview")
+def test_checked_old_filter_session_opens_that_session_not_newest(
+    server, owner, folder
+):
+    # The same back-in-history gesture for filter-linked sessions: checking an
+    # old filter save opens it, even though re-entering the filter row itself
+    # resumes the newest.
+    filter_ = [{"meta.pick": "yes"}]
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    r1 = _saveToFolder(server, folder, owner, b"first", {"filter": filter_})
+    s1Id = _itemIdFromResume(r1.json["resumeUrl"])
+    r2 = _saveToFolder(server, folder, owner, b"second", {"filter": filter_})
+    s2Id = _itemIdFromResume(r2.json["resumeUrl"])
+    assert s2Id != s1Id
+
+    resp = _folderManifest(
+        server, folder, owner, params={"items": s1Id, "folders": ""}, exception=True
+    )
+    assert _sessionDownloadUrls(resp) == [_itemFileDownloadUrl(s1Id)]
+
+    # The filter row itself still resumes the newest matching save.
+    resp = _folderManifest(
+        server, folder, owner, params={"filters": json.dumps(filter_)}, exception=True
+    )
+    assert _sessionDownloadUrls(resp) == [_itemFileDownloadUrl(s2Id)]
 
 
 @pytest.mark.plugin("volview")
@@ -302,10 +338,12 @@ def test_filters_must_be_json_object_or_array(server, owner, folder):
 
 
 @pytest.mark.plugin("volview")
-def test_checked_session_save_rebases_so_newest_resumes(server, owner, folder):
-    # H-1: a save made from a *checked-session* open must rebase its
-    # linkedResources back onto the originals, so re-checking the original images
-    # resumes the NEWEST save -- not the older session it was opened from.
+def test_checked_session_save_rebases_linked_resources_to_originals(
+    server, owner, folder
+):
+    # A save made from a *checked-session* open rebases its linkedResources back
+    # onto the session's own lineage: the new save records the ORIGINAL raw
+    # selection, not {items:[S1]}, keeping the recorded selection truthful.
     from girder.models.item import Item
 
     itemA, _ = _uploadFile(folder, owner, "a.nrrd")
@@ -324,23 +362,39 @@ def test_checked_session_save_rebases_so_newest_resumes(server, owner, folder):
     s2Id = _itemIdFromResume(r2.json["resumeUrl"])
     assert s2Id != s1Id
 
-    # Re-check the original images: the newest matching session (S2) resumes.
-    resp = _folderManifest(
-        server,
-        folder,
-        owner,
-        params={"items": ",".join(originals["items"]), "folders": ""},
-        exception=True,
-    )
-    assert _resourceNames(resp).count("session.volview.zip") == 1
+    s2 = Item().load(s2Id, force=True)
+    linked = s2.get("meta", {}).get("linkedResources", {})
+    assert set(linked.get("items", [])) == set(originals["items"])
 
-    s2File = next(iter(Item().childFiles(Item().load(s2Id, force=True))))
-    sessionUrls = [
-        r["url"]
-        for r in resp.json["resources"]
-        if r["name"] == "session.volview.zip"
-    ]
-    assert sessionUrls == [makeFileDownloadUrl(s2File)]
+
+@pytest.mark.plugin("volview")
+def test_checked_filter_session_save_inherits_filter_lineage(server, owner, folder):
+    # A save made from a checked FILTER-session open inherits the filter link
+    # (via the rebase), so the filter row resumes the new save and the bare
+    # folder-open keeps excluding it.
+    filter_ = [{"meta.pick": "yes"}]
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    r1 = _saveToFolder(server, folder, owner, b"first", {"filter": filter_})
+    s1Id = _itemIdFromResume(r1.json["resumeUrl"])
+
+    # Reopen S1 by checking it, then save; metadata carries {items:[S1]}.
+    r2 = _saveToFolder(
+        server, folder, owner, b"second", {"items": [s1Id], "folders": []}
+    )
+    s2Id = _itemIdFromResume(r2.json["resumeUrl"])
+    assert s2Id != s1Id
+
+    # The filter row resumes the NEW save.
+    resp = _folderManifest(
+        server, folder, owner, params={"filters": json.dumps(filter_)}, exception=True
+    )
+    assert _sessionDownloadUrls(resp) == [_itemFileDownloadUrl(s2Id)]
+
+    # The bare folder-open still excludes filter-linked saves.
+    resp = _folderManifest(server, folder, owner, exception=True)
+    assert not any(
+        ".volview.zip" in r["name"] for r in resp.json["resources"]
+    )
 
 
 @pytest.mark.plugin("volview")
@@ -458,34 +512,29 @@ def test_item_save_returns_resume_url_pointing_at_the_item(server, owner, folder
 
 
 @pytest.mark.plugin("volview")
-def test_repeat_save_into_resumed_item_stays_one_folder_session(server, owner, folder):
-    # The first folder-scoped save mints ONE session item; the client then
-    # repoints save= at that item, so the next save is item-scoped INTO the same
-    # item -- no second folder session item (no proliferation, save-in-place).
-    from girder.models.item import Item
-
+def test_repeat_folder_saves_accumulate_session_items(server, owner, folder):
+    # The client repoints only its reload (urls=) after a save; the save target
+    # stays folder-scoped, so every save mints a NEW session.volview.zip item in
+    # the folder and a bare folder-open / F5 resumes the newest one.
     _uploadFile(folder, owner, "brain.nrrd")  # a raw image so the folder isn't empty
     r1 = _saveToFolder(server, folder, owner, b"first", {"items": [], "folders": []})
-    sessionId = _itemIdFromResume(r1.json["resumeUrl"])
+    firstId = _itemIdFromResume(r1.json["resumeUrl"])
     assert _sessionItemCount(folder) == 1
 
-    # Second save -> the resumed item's URL (item-scoped), as the client repoints.
-    sessionItem = Item().load(sessionId, force=True)
-    r2 = _saveToItem(server, sessionItem, owner, b"second")
-    assert r2.json["resumeUrl"] == "/api/v1/item/%s/volview" % sessionId
-
-    # Still exactly one folder session item; the item now holds both saves and
-    # the newest opens through on reload.
-    assert _sessionItemCount(folder) == 1
-    resp = _itemManifest(server, sessionItem, owner, exception=True)
-    assert any(n.endswith(".volview.zip") for n in _resourceNames(resp))
+    # Second save hits the SAME folder route again -> a second session item.
+    r2 = _saveToFolder(server, folder, owner, b"second", {"items": [], "folders": []})
+    secondId = _itemIdFromResume(r2.json["resumeUrl"])
+    assert secondId != firstId
+    assert _sessionItemCount(folder) == 2
 
 
 def _sessionItemCount(folder):
     from girder.models.folder import Folder
 
+    # Girder uniquifies duplicate item names ("session.volview.zip (1)"), so
+    # match by substring like the plugin's isSessionItem does.
     return sum(
-        1 for it in Folder().childItems(folder) if it["name"].endswith(".volview.zip")
+        1 for it in Folder().childItems(folder) if ".volview.zip" in it["name"]
     )
 
 

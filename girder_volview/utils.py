@@ -452,15 +452,6 @@ def getLinkedResources(item):
     return normalizeLinkedResources(resources)
 
 
-def matchesSelectionSet(folders, items, item):
-    foldersA = set(folders or [])
-    itemsA = set(items or [])
-    itemResources = getLinkedResources(item)
-    foldersB = set(itemResources.get("folders", []))
-    itemsB = set(itemResources.get("items", []))
-    return foldersA == foldersB and itemsA == itemsB
-
-
 def getTouchedTime(item):
     lastOpened = item.get("meta", {}).get("lastOpened")
     if lastOpened:
