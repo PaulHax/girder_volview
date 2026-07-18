@@ -35,7 +35,6 @@ shell:
 - POST item/:id/volview -> upload file to Item with cookie authentication
 - GET file/:id/proxiable/:name -> download a file with option to proxy
 - GET folder/:id/volview_config/:name -> download JSON with VolView config properties
-- Deprecated: GET item/:id/volview/datasets -> download all files in item except the `*.volview.zip`
 
 The launch-manifest routes' resume/fresh semantics are documented in
 [sessions.md](./sessions.md).

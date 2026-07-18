@@ -12,7 +12,6 @@ from girder.constants import AccessType, TokenScope
 
 from girder.models.file import File
 from girder.models.item import Item
-from girder.utility import ziputil
 
 from girder.models.folder import Folder
 
@@ -28,7 +27,7 @@ from .backend.launch import (
     saveToItem,
     saveToFolder,
 )
-from .utils import isLoadableImage, isLoadableFile
+from .utils import isLoadableFile
 
 
 def hasLoadableFile(files, user=None):
@@ -144,41 +143,6 @@ def volViewLoadableFolder(self, folder):
     return {"loadable": loadable}
 
 
-# Deprecated, use downloadManifest
-@access.public(cookie=True, scope=TokenScope.DATA_READ)
-@boundHandler
-@autoDescribeRoute(
-    Description("Download zip of item files that do not end in volview.zip")
-    .modelParam("itemId", model=Item, level=AccessType.READ)
-    .produces(["application/zip"])
-    .errorResponse("ID was invalid.")
-    .errorResponse("Read access was denied for the item.", 403)
-)
-def downloadDatasets(self, item):
-    setResponseHeader("Content-Type", "application/zip")
-    setContentDisposition(item["name"] + ".zip")
-
-    def stream():
-        zip = ziputil.ZipGenerator(item["name"])
-        itemCache = {item["_id"]: item}
-        sansSessions = [
-            fileEntry
-            for fileEntry in Item().fileList(item, subpath=False, data=False)
-            if isLoadableImage(
-                fileEntry[1], user=self.getCurrentUser(), itemCache=itemCache
-            )
-        ]
-        toZip = [
-            (path, File().download(file, headers=False)) for path, file in sansSessions
-        ]
-        for path, file in toZip:
-            for data in zip.addFile(file, path):
-                yield data
-        yield zip.footer()
-
-    return stream
-
-
 @access.public(scope=TokenScope.DATA_READ, cookie=True)
 @boundHandler
 @autoDescribeRoute(
@@ -272,11 +236,6 @@ class GirderPlugin(plugin.GirderPlugin):
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview_config", ":name"), getFolderConfigFile
         )
-        # volview/datasets is deprecated.  Use GET {folder|item}/volview instead.
-        info["apiRoot"].item.route(
-            "GET", (":itemId", "volview", "datasets"), downloadDatasets
-        )
-
         # ------------------------------------------------------------------
         # Processing provider backend
         # ------------------------------------------------------------------
