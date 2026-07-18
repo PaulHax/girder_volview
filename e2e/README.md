@@ -7,10 +7,9 @@ URL-driven **save → refresh → restore** contract, and the **Jobs apply**
 path — against a stack that is serving the **developing code**, not stale/stock
 code.
 
-It lives in the plugin repo because the plugin *is* the integration point; VolView
-stays ignorant of it. See [`E2E-TEST-PLAN.md`](../../plans/jobs-in-volview/E2E-TEST-PLAN.md)
-for the layering rationale and [`SAVE-LOAD-RESTORE-SPEC.md`](../../plans/jobs-in-volview/SAVE-LOAD-RESTORE-SPEC.md)
-for the contract under test.
+It lives in the plugin repo because the plugin *is* the integration point;
+VolView stays ignorant of it. The save/restore behavior under test is described
+in the top-level README's "Save / restore round-trip" section.
 
 **Self-provisioning:** you do **not** hand-create any test data. A Playwright
 `globalSetup` health-checks the stack, verifies the deploy receipt, authenticates
@@ -24,11 +23,12 @@ a different stack. The suite runs **headless** and fully automated.
 ## Run
 
 ```bash
-# 1. Serve the DEVELOPING code (both halves) + write the deploy receipt:
-/home/paulhax/src/dsa/deploy-dev.sh
+# 1. Deploy the paired stack (this worktree's backend + the paired VolView
+#    dist) and write the deploy receipt — see "Prerequisites" below for the
+#    contract your deploy tooling must satisfy.
 
 # 2. Install + run the browser e2e:
-cd girder_volview-just-jobs/e2e
+cd e2e
 npm install
 npm run install-browser        # playwright install chromium
 npm test
@@ -89,13 +89,14 @@ correlation test (`tests/test_end_to_end_live.py`), which proves the server side
 `globalSetup` (`global.setup.ts`) runs before any test:
 
 1. **Health check.** `GET {base}/{apiRoot}/system/version`. If girder is
-   unreachable it throws immediately with `deploy-dev.sh` instructions — the tests
+   unreachable it throws immediately with bring-up instructions — the tests
    never spin on a dead stack.
-2. **Deploy-receipt guard.** `deploy-dev.sh` writes `deployed-heads.json` next to
-   the served SPA recording the worktree HEADs it deployed. The setup refuses to
-   run unless the stack serves **this** worktree's current `girder_volview` HEAD —
-   so a bare/stale stack (MAIN checkout + stock VolView) fails fast and loud
-   instead of silently testing the wrong code.
+2. **Deploy-receipt guard.** The deploy step writes `deployed-heads.json` next
+   to the served SPA recording the worktree HEADs it deployed (see
+   "Prerequisites"). The setup refuses to run unless the stack serves **this**
+   worktree's current `girder_volview` HEAD — so a bare/stale stack (a stock
+   bring-up serving a different checkout + packaged VolView) fails fast and
+   loud instead of silently testing the wrong code.
 3. **Provision data.** Authenticates (`GET /user/authentication`, Basic),
    `POST /folder?…&reuseExisting=false&public=true` to create a fresh
    `girder-volview-e2e-<runid>` folder, then uploads `synthetic-a.nrrd` and
@@ -112,12 +113,34 @@ passes on it just like a real image.
 
 ## Prerequisites
 
-- A stack deployed by `deploy-dev.sh` (serves this worktree's backend + the
-  **processing-enabled** VolView dist into `static/built/plugins/volview/`, and
-  leaves the receipt the setup checks). `deploy-dev.sh` closes the two deploy traps
-  that used to bite here: it mounts **this** worktree (not the MAIN checkout) and
-  re-overlays the processing VolView dist (a plain `girder build` clobbers it with
-  stock VolView, which drops the save button and breaks steps 3–5).
+- **A deployed paired stack.** How you stand it up is your business (a
+  DSA/girder docker-compose bring-up is the reference environment); what the
+  harness requires of it is a contract:
+  1. girder reachable at `helpers/config.ts`'s `baseURL` with the
+     `helpers/config.ts` admin credentials;
+  2. the backend is **this worktree's** `girder_volview` (not a released or
+     other checkout);
+  3. the served SPA at `static/built/plugins/volview/` is the **paired,
+     processing-enabled** VolView build (beware: a plain `girder build`
+     re-clobbers it with the pinned npm package, which can drop the save
+     button and break steps 3–5);
+  4. a **deploy receipt** at
+     `{baseURL}/static/built/plugins/volview/deployed-heads.json` — JSON
+     written at deploy time next to the served `index.html`:
+
+     ```json
+     {
+       "girderSha":   "<full HEAD of the deployed girder_volview worktree>",
+       "girderShort": "<its short form>",
+       "volviewSha":  "<full HEAD of the deployed VolView worktree>",
+       "volviewShort": "<its short form>"
+     }
+     ```
+
+     The guard compares `girderSha` against this worktree's `HEAD` and refuses
+     to run on mismatch; the other fields are informational. Extra fields are
+     fine. Writing the receipt is the deploy tooling's LAST step, so its
+     presence certifies the rest of the contract.
 - Node 18+ (developed on Node 22).
 - Chromium for Playwright (`npm run install-browser`).
 

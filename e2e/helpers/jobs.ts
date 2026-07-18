@@ -56,8 +56,8 @@ export async function findTask(
   const task = tasks.find((t) => (t.title || '').startsWith(titlePrefix));
   if (!task) {
     throw new Error(
-      `[e2e] no "${titlePrefix}*" task registered (run ./ensure-radiology-cli.sh); ` +
-        `tasks=${JSON.stringify(tasks.map((t) => t.title))}`
+      `[e2e] no "${titlePrefix}*" task registered — register the radiology CLI ` +
+        `image with slicer_cli_web; tasks=${JSON.stringify(tasks.map((t) => t.title))}`
     );
   }
   return task;

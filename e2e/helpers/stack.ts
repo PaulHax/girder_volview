@@ -4,20 +4,22 @@ import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 
 // ---------------------------------------------------------------------------
-// Stack lifecycle. The suite assumes a stack that deploy-dev.sh already brought
-// up and deployed the developing worktrees onto; it does not manage docker. Two
-// checks run in global setup: a fail-fast health probe, then a deploy-receipt
-// guard that refuses to run against a stale/wrong deploy.
+// Stack lifecycle. The suite assumes an already-deployed paired stack — this
+// worktree's backend plus the paired VolView dist, with a deploy receipt next
+// to the served SPA (the contract is documented in e2e/README
+// "Prerequisites"); it does not manage docker. Two checks run in global setup:
+// a fail-fast health probe, then a deploy-receipt guard that refuses to run
+// against a stale/wrong deploy.
 // ---------------------------------------------------------------------------
 
 const VERSION_URL = apiUrl('/system/version');
-const DEPLOY_DEV = '/home/paulhax/src/dsa/deploy-dev.sh';
+
+const RECEIPT_HINT =
+  'Deploy the paired stack and write the deploy receipt — see e2e/README "Prerequisites".';
 
 const BRING_UP_HINT =
-  `\nServe the developing code + write the deploy receipt:\n  ${DEPLOY_DEV}\n` +
-  `then wait for  curl -f ${VERSION_URL}  to succeed.\n` +
-  `A bare stack serves the MAIN checkout + stock VolView; deploy-dev.sh serves\n` +
-  `your worktrees, and this harness verifies its receipt.`;
+  `\n${RECEIPT_HINT}\n` +
+  `Then wait for  curl -f ${VERSION_URL}  to succeed.`;
 
 async function versionReachable(request: APIRequestContext): Promise<boolean> {
   try {
@@ -36,11 +38,12 @@ export async function healthCheck(request: APIRequestContext): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Deploy guard. deploy-dev.sh writes a receipt next to the served SPA recording
-// the worktree HEADs it deployed. Refuse to run unless the stack is serving THIS
-// girder_volview worktree's current HEAD — so a stale/wrong deploy fails fast and
-// loud ("run deploy-dev.sh") instead of surfacing as a confusing mid-test
-// assertion (the exact trap an earlier run fell into: it tested the MAIN checkout).
+// Deploy guard. The deploy step writes a receipt next to the served SPA
+// recording the worktree HEADs it deployed (the receipt contract is in
+// e2e/README "Prerequisites"). Refuse to run unless the stack is serving THIS
+// girder_volview worktree's current HEAD — so a stale/wrong deploy fails fast
+// and loud instead of surfacing as a confusing mid-test assertion (the exact
+// trap an earlier run fell into: it tested a different checkout).
 // ---------------------------------------------------------------------------
 const RECEIPT_URL = `${CONFIG.baseURL}/static/built/plugins/volview/deployed-heads.json`;
 
@@ -68,8 +71,8 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
   } catch (e) {
     throw new Error(
       `[e2e] no deploy receipt at ${RECEIPT_URL} (${(e as Error).message}).\n` +
-        `The stack was not deployed via deploy-dev.sh, so it is serving the MAIN\n` +
-        `checkout + stock VolView — not your worktrees. Run:\n  ${DEPLOY_DEV}`
+        `Without a receipt the stack is presumed to serve stock code — not this\n` +
+        `worktree. ${RECEIPT_HINT}`
     );
   }
 
@@ -80,7 +83,8 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
   if (localGirder && receipt.girderSha && localGirder !== receipt.girderSha) {
     throw new Error(
       `[e2e] deploy is stale: the stack serves girder_volview ${receipt.girderShort} ` +
-        `but this worktree is at ${localGirder.slice(0, 9)}.\nRe-run ${DEPLOY_DEV}.`
+        `but this worktree is at ${localGirder.slice(0, 9)}.\n` +
+        `Redeploy and refresh the receipt. ${RECEIPT_HINT}`
     );
   }
 

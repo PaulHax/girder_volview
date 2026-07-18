@@ -76,9 +76,9 @@ jobs:
   # It needs a running paired stack (mongo + girder + girder_worker + the
   # radiology CLI image serving the VolView dist). That stack is defined OUTSIDE
   # this repo (digital_slide_archive/devops compose + the volview-radiology-cli
-  # image) and today is stood up by the machine-specific deploy-dev.sh, so this
-  # job is gated on an explicit opt-in until a portable CI bring-up exists. To
-  # enable it, provision the paired stack in the "Bring up paired stack" step
+  # image) and today is stood up by maintainer-local tooling, so this job is
+  # gated on an explicit opt-in until a portable CI bring-up exists. To enable
+  # it, provision the paired stack in the "Bring up paired stack" step
   # (reachable at e2e/helpers/config.ts's localhost:8080 / admin / password) and
   # set the repository variable RUN_PAIRED_BROWSER_GATE=true.
   #
@@ -96,11 +96,13 @@ jobs:
         with:
           node-version: 22
       - name: Bring up paired stack
-        # MAINTAINER WIRING POINT: stand up mongo + girder + girder_worker + the
-        # radiology CLI image serving the pinned `volview` dist, reachable at
-        # http://localhost:8080 (admin/password) — see deploy-dev.sh +
-        # ensure-radiology-cli.sh. Left as an explicit step so the stack source
-        # (a separate devops repo) is provisioned deliberately, not implicitly.
+        # MAINTAINER WIRING POINT: stand up mongo + girder + girder_worker
+        # serving the pinned `volview` dist, reachable at http://localhost:8080
+        # (admin/password), with the radiology CLI tasks registered in
+        # slicer_cli_web and the deploy receipt written (the contract is in
+        # e2e/README "Prerequisites"). Left as an explicit step so the stack
+        # source (a separate devops repo) is provisioned deliberately, not
+        # implicitly.
         run: |
           echo "Provision the paired live stack here (see job comment)." >&2
           exit 1

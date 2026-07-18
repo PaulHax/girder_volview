@@ -369,24 +369,25 @@ Filter-linked sessions record a `linkedResources.filter` (a metadata key/value d
 
 ## Development
 
-Get this running https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
+Get a stack running with
+https://github.com/DigitalSlideArchive/digital_slide_archive/tree/master/devops/with-dive-volview
 
-In the `docker-compose.override.yml` file, add volumes pointing to this Girder
-plugin. If you want to use a local VolView build, mount that build's `dist`
-directory over the packaged VolView `dist` directory. Example:
+In the `docker-compose.override.yml` file, add a volume mounting your checkout
+of this plugin (replace `/path/to/girder_volview` with wherever you cloned it —
+the paths make no assumption about checkouts sitting next to each other):
 
 ```yaml
 services:
   girder:
     volumes:
       - ../with-dive-volview/provision.divevolview.yaml:/opt/digital_slide_archive/devops/dsa/provision.yaml
-      - ../../../girder_volview:/opt/girder_volview
-      - ../../../../VolView/dist:/opt/girder_volview/girder_volview/web_client/node_modules/volview/dist:ro
+      - /path/to/girder_volview:/opt/girder_volview
 ```
 
 Comment out the pip install of this plugin here: https://github.com/DigitalSlideArchive/digital_slide_archive/blob/master/devops/with-dive-volview/provision.divevolview.yaml#L3
 
-To install volume mapped girder-volview plugin and incorporate changes as files are edited, add this to the `shell` section of the provision.yaml:
+To install the volume-mapped plugin and incorporate changes as files are
+edited, add this to the `shell` section of the provision.yaml:
 
 ```yaml
 shell:
@@ -396,17 +397,24 @@ shell:
 
 ### Develop VolView client
 
-To develop with a local VolView build, build VolView from source and mount or
-copy its `dist` directory over `girder_volview/web_client/node_modules/volview/dist`
-before rebuilding the Girder web client. The checked-in Webpack helper always
-copies from the packaged `node_modules/volview/dist` path, so local development
-does not require changing `webpack.helper.js`.
-
-Then build VolView from source:
+The VolView client is consumed as the `volview` npm package: `girder build`
+installs the version pinned in `girder_volview/web_client/package.json` and
+serves its `dist/`; the backend conformance tests read the same package's
+`backend-contract/`. To develop against an unreleased VolView build, make
+`girder_volview/web_client/node_modules/volview` BE your local build instead
+of the pinned release — either `npm link` your VolView checkout, or
+`npm pack` it and install the tarball (the closer match to what a release
+does, since it goes through the package's `files` allowlist):
 
 ```sh
-npm run build
+cd /path/to/VolView && npm run build && npm pack
+npm --prefix girder_volview/web_client install /path/to/VolView/volview-*.tgz
 ```
+
+Then rebuild/restart girder so the served dist is refreshed. Mounting or
+copying only a `dist/` over `node_modules/volview/dist` also works for
+UI-only iteration, but leaves the package's `backend-contract` at the pinned
+version — fine for the browser, wrong for the conformance tests.
 
 Processing (the Analysis/Jobs tab) and remote session save ship in every build
 and no longer need build-time env flags — `VITE_ENABLE_PROCESSING`,

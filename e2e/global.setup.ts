@@ -17,8 +17,8 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   try {
     await healthCheck(request);
     // Refuse to run against a stale/wrong deploy — the stack must be serving THIS
-    // worktree's code (deploy-dev.sh receipt), or every gesture would silently test
-    // the MAIN checkout + stock VolView.
+    // worktree's code (deploy receipt, see README "Prerequisites"), or every
+    // gesture would silently test a stale checkout + stock VolView.
     await verifyDeployedHeads(request);
     const state = await provision(request);
     writeState(state);

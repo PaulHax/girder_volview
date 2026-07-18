@@ -15,7 +15,8 @@ Self-skipping on reachability -- the same pattern ``test_job_output_binding_rout
 uses for its test Mongo: they run automatically when the dsa stack answers at
 ``GIRDER_URL`` and skip when it does not, so the offline gate (``tox -e test``)
 stays green with the stack down and gains real coverage when it is up. No env
-var to remember -- just bring the stack up (+ ``./ensure-radiology-cli.sh``)::
+var to remember -- just bring the stack up with the radiology CLI tasks
+registered in slicer_cli_web::
 
     python -m pytest tests/test_end_to_end_live.py -v
 
@@ -61,7 +62,8 @@ pytestmark = pytest.mark.skipif(
     not _stack_up(),
     reason=(
         "live e2e self-skips unless the dsa stack answers at GIRDER_URL/api/v1 "
-        "(default http://localhost:8080); bring it up + ./ensure-radiology-cli.sh"
+        "(default http://localhost:8080); bring it up with the radiology CLI "
+        "tasks registered"
     ),
 )
 
@@ -190,8 +192,8 @@ def _find_task(gc, folder_id, prefix):
         if (task.get("title") or "").startswith(prefix):
             return task
     pytest.skip(
-        "%s task not registered (run ./ensure-radiology-cli.sh); tasks=%s"
-        % (prefix, [t.get("title") for t in tasks])
+        "%s task not registered (register the radiology CLI image with "
+        "slicer_cli_web); tasks=%s" % (prefix, [t.get("title") for t in tasks])
     )
 
 
