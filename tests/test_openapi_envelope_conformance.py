@@ -8,7 +8,7 @@ envelope component schemas the client wraps the wire vocabulary in
 ``JobResults`` results envelope) had NO validating consumer. Each is now
 validated against REAL backend route payloads.
 
-Single source: the envelope schemas are loaded from the SAME vendored
+Single source: the envelope schemas are loaded from the SAME contract
 ``openapi.json`` under ``components.schemas`` (never hand-copied into this test),
 and every ``$ref`` resolves against that same document — so this consumer can
 never fork the contract. ``jsonschema`` is a hard test dep: a missing
@@ -44,7 +44,7 @@ def _envelope_validator(component_name):
     The whole OpenAPI document is the validation resource, and a top-level
     ``$ref`` targets the component; nested ``$ref``s (e.g. ``RunTaskRequest`` ->
     ``InputValue``, ``JobRef`` -> ``NeutralJobStatus``) resolve against the SAME
-    document. This loads the schema straight from the vendored contract — it does
+    document. This loads the schema straight from the contract — it does
     not hand-copy schema JSON (which would fork the single source).
     """
     doc = _load_openapi()

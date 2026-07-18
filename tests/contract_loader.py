@@ -1,27 +1,79 @@
-"""Loader for the vendored backend-contract golden fixtures + generated JSON
+"""Loader for VolView's backend-contract golden fixtures + generated JSON
 Schemas.
 
-The fixtures under ``tests/contract/`` are a copy of VolView's
-``backend-contract`` package, synced by that package's
-``scripts/sync-backend.sh`` (one normative source in VolView, a synced copy
-here — never hand-edited). This module is pure stdlib (no girder import) so it
-loads without a running Girder/Mongo.
+The contract is the ``backend-contract`` subtree of the ``volview`` package (its
+``fixtures/`` + ``generated/`` ship in the package's ``files``). It is the ONE
+normative source; the backend never keeps its own copy. The tests read it from
+wherever the ``volview`` dependency is installed:
 
-This module only wires the loader (the backend test suite must LOAD the same
-fixtures); the conformance assertions that validate backend-emitted specs /
-intents / statuses against these fixtures + generated schemas live in the
-companion contract test modules.
+* CI / released backend: the pinned ``volview`` npm package
+  (``girder_volview/web_client/node_modules/volview``).
+* Local development against an unreleased VolView branch: ``npm link`` a local
+  VolView checkout into ``web_client`` (see ``README``), or point
+  ``GIRDER_VOLVIEW_CONTRACT_DIR`` straight at a checkout's ``backend-contract``.
+
+Resolution: ``GIRDER_VOLVIEW_CONTRACT_DIR`` (an escape hatch / explicit checkout)
+if set, else the installed package. The chosen root must carry the ``generated/``
+schemas or the import fails loudly — the conformance kit is a gate that must
+never silently self-skip.
+
+Pure stdlib (no girder import) so it loads without a running Girder/Mongo. This
+module only wires the loader; the conformance assertions that validate
+backend-emitted specs / intents / statuses against these fixtures + generated
+schemas live in the companion contract test modules.
 """
 
 import json
+import os
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-CONTRACT_ROOT = _HERE / "contract"
+_REPO_ROOT = _HERE.parent
+
+# The ``volview`` package always ships ``backend-contract/`` (npm install OR
+# npm link); this is where npm places it under the girder web client.
+_INSTALLED_CONTRACT = (
+    _REPO_ROOT
+    / "girder_volview"
+    / "web_client"
+    / "node_modules"
+    / "volview"
+    / "backend-contract"
+)
+
+_ENV_VAR = "GIRDER_VOLVIEW_CONTRACT_DIR"
+_SCHEMA_SUFFIX = ".schema.json"
+
+
+def _resolve_contract_root():
+    """Locate the ``backend-contract`` tree, or fail with a fix-it message.
+
+    Prefer an explicit ``GIRDER_VOLVIEW_CONTRACT_DIR`` override, else the
+    installed ``volview`` package. The chosen root must carry the ``generated/``
+    schemas -- a set-but-wrong override fails loud pointing at itself, never
+    silently falling back to the package.
+    """
+    env_dir = os.environ.get(_ENV_VAR)
+    root = Path(env_dir).expanduser() if env_dir else _INSTALLED_CONTRACT
+    if (root / "generated").is_dir():
+        return root.resolve()
+
+    raise RuntimeError(
+        "VolView backend-contract not found under %s. The backend reads the "
+        "contract from the `volview` package, not a vendored copy. Fix by "
+        "either:\n"
+        "  * installing the client:  npm --prefix girder_volview/web_client install\n"
+        "  * linking a local VolView checkout:  "
+        "cd <VolView> && npm link && "
+        "npm --prefix girder_volview/web_client link volview\n"
+        "  * or setting %s=<path-to>/backend-contract"
+        % (root, _ENV_VAR)
+    )
+
+
+CONTRACT_ROOT = _resolve_contract_root()
 FIXTURES_ROOT = CONTRACT_ROOT / "fixtures"
 GENERATED_ROOT = CONTRACT_ROOT / "generated"
-
-_SCHEMA_SUFFIX = ".schema.json"
 
 
 def load_fixture(rel_path):

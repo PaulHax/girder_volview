@@ -416,6 +416,10 @@ same-origin egress gate; a same-origin deployment (such as DSA) needs no
 configuration, and cross-origin targets are never allowed.
 See [Processing provider & remote-save origin gate](docs/processing_origin_gate.md).
 
+Running the backend conformance tests (against the pinned `volview` package or a
+local VolView checkout via `npm link`) is documented in
+[docs/development.md](docs/development.md).
+
 ### Updating the VolView Client Version
 
 1. Update the [volview](https://www.npmjs.com/package/volview?activeTab=versions) version in `./girder_volview/web_client/package.json`

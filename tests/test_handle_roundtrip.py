@@ -1,7 +1,7 @@
 """The proxiable load-handle scheme round-trips.
 
-Driven by the vendored contract corpus
-(``tests/contract/fixtures/wire/handle-roundtrip.json``, contract 0.4.0):
+Driven by the VolView backend-contract corpus
+(``backend-contract/fixtures/wire/handle-roundtrip.json``, contract 0.4.0):
 the handle module percent-encodes the file-name segment at mint and
 unescapes it at parse, so
 

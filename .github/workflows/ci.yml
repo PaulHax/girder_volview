@@ -31,6 +31,19 @@ jobs:
         run: pip install --no-cache-dir tox
       - name: Lint (ruff)
         run: tox -e lint
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the pinned VolView package (carries the backend-contract)
+        # The conformance suite reads the contract from the `volview` package
+        # (node_modules/volview/backend-contract), never a vendored copy. The
+        # pinned package ships prebuilt artifacts, so `--ignore-scripts` skips any
+        # build hook -- a plain, fast extract that works on any Node -- and
+        # `--omit=dev` drops the JS-lint devDeps (eslint/pug-lint/stylint) this
+        # job never runs (they're covered by the web-client job). Runs AFTER ruff
+        # so the linter never walks node_modules.
+        working-directory: girder_volview/web_client
+        run: npm install --ignore-scripts --omit=dev
       - name: Server tests
         # `-n auto` parallelizes across cores via pytest-xdist. Safe here because
         # pytest-girder names each test's database uniquely, so workers sharing
@@ -50,39 +63,6 @@ jobs:
         run: |
           npm install
           npm run lint
-
-  # ---------------------------------------------------------------------------
-  # Paired cross-repo CONTRACT gate (required).
-  #
-  # Proves the backend's VENDORED contract copy (tests/contract/) matches the
-  # VolView revision this backend is paired with -- WITHOUT a second repo checkout
-  # or any env-var pin. The pin is already carried by the single source of truth
-  # every consumer honours: the `volview` version in web_client/package.json.
-  # `npm install` resolves that exact (SHA-embedded) version from the registry;
-  # the package ships its own backend-contract artifacts (VolView `files`), so we
-  # diff them against tests/contract/ directly. To re-pair, bump that one
-  # dependency version in the same PR that lands the coordinated contract change.
-  #
-  # The other half -- "VolView's generated contract is in sync with its zod
-  # source" -- is guaranteed by VolView's OWN CI (the generated-schema vitest spec
-  # under `npm test`), so the shipped artifacts are already fresh. That is why the
-  # verify runs with --no-generate and needs no zod/tsx toolchain here.
-  paired-contract:
-    name: Paired contract verification
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout girder_volview (self)
-        uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install the pinned VolView package (carries backend-contract)
-        working-directory: girder_volview/web_client
-        run: npm install
-      - name: Verify the backend's vendored contract matches the pinned client
-        run: |
-          girder_volview/web_client/node_modules/volview/backend-contract/scripts/verify-backend.sh \
-            --no-generate "$GITHUB_WORKSPACE"
 
   # ---------------------------------------------------------------------------
   # Paired BROWSER gate (the live token-only run+auto-apply flow).

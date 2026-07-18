@@ -1,3 +1,8 @@
+# The backend-contract is read from the installed `volview` package
+# (node_modules/volview/backend-contract), never vendored. Ignore any local
+# materialization someone points GIRDER_VOLVIEW_CONTRACT_DIR at here.
+/tests/contract/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

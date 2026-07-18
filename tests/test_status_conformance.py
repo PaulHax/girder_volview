@@ -9,7 +9,7 @@ girder ``JobStatus`` the backend can observe must project to a state the generat
 schema accepts, and the whole projected payload must validate.
 
 Pure-unit (no server fixture / Mongo): it drives the pure projector against
-hand-built job dicts and validates with the vendored generated JSON Schema.
+hand-built job dicts and validates with the generated JSON Schema.
 """
 
 import jsonschema

@@ -4,8 +4,8 @@ This module ports the client parser's mapping tables
 (``src/processing/adapters/slicer-cli/parser/`` in VolView, itself ported from
 ``slicer_cli_web``'s ``parser.js``) to the backend so the server emits VolView's
 own ``zod``-defined task spec and the client never parses a
-backend's XML. **Ported, not redesigned** -- the golden fixtures under
-``tests/contract/fixtures/task-spec/`` pin the output exactly.
+backend's XML. **Ported, not redesigned** -- VolView's ``backend-contract``
+``task-spec`` golden fixtures pin the output exactly.
 
 Two mappings are new here (the client port carried neither):
 

@@ -1,6 +1,0 @@
-{
-  "code": "results_unavailable",
-  "message": "Job did not succeed; results are unavailable.",
-  "state": "error",
-  "resultState": "unavailable"
-}

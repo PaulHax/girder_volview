@@ -1,13 +1,13 @@
 """The published OpenAPI is the backend's obligation surface.
 
-The neutral REST OpenAPI (single-source-generated in VolView, vendored here with
-the fixtures + generated schemas) states exactly what a NON-girder backend must
-implement. This is the backend-side half of the conformance kit: the vendored
+The neutral REST OpenAPI (single-source-generated in VolView, read here from the
+`volview` package's backend-contract) states exactly what a NON-girder backend
+must implement. This is the backend-side half of the conformance kit: the contract
 document stays neutral (grep-tested for girder route/id/enum/URL leaks — AC1),
 declares exactly the neutral client-invoked operations, and the reference backend
 implements every one of them.
 
-Pure-stdlib (no server fixture / Mongo): it reads the vendored JSON and checks
+Pure-stdlib (no server fixture / Mongo): it reads the contract JSON and checks
 the module-level handlers exist.
 """
 
@@ -71,7 +71,7 @@ def _declared_operation_ids(doc):
     }
 
 
-def test_openapi_is_vendored_and_is_openapi_3_1():
+def test_openapi_present_and_is_openapi_3_1():
     assert _OPENAPI.exists()
     assert _load_openapi()["openapi"].startswith("3.1")
 
