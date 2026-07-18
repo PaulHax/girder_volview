@@ -1,24 +1,12 @@
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
+import { readJson } from './http';
 import { makeNrrd } from './nrrd';
 import { E2eState } from './state';
 
 // Data provisioning over the girder REST API: authenticate, create a fresh
 // public folder, and upload two synthetic NRRD images, so the gestures have
 // loadable distinct picks without operator-created fixtures.
-
-async function readJson(res: import('@playwright/test').APIResponse, ctx: string): Promise<any> {
-  const status = res.status();
-  const text = await res.text();
-  if (status >= 300) {
-    throw new Error(`[e2e] ${ctx} failed: HTTP ${status} ${text.slice(0, 400)}`);
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`[e2e] ${ctx}: non-JSON response: ${text.slice(0, 200)}`);
-  }
-}
 
 // Basic-auth against girder; returns the session token + the user's _id.
 export async function authenticate(

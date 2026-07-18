@@ -7,8 +7,7 @@ Needs a live pytest-girder Mongo; the module self-skips when it is unreachable.
 
 import datetime
 import io
-from conftest import mongo_reachable
-import uuid
+from conftest import _reload, mongo_reachable
 
 import jsonschema
 import pytest
@@ -30,46 +29,8 @@ ITEM_MANIFEST_PATH = "/item/%s/volview"
 
 
 # ---------------------------------------------------------------------------
-# Users / folders
+# Users / folders (shared owner/stranger fixtures live in conftest)
 # ---------------------------------------------------------------------------
-
-
-# Unique per-test logins: under serial full-suite runs the girder db fixture
-# leaks state across tests (a fixed login "already exists" even though the
-# fixture reports a fresh database). Unique identities sidestep the leak instead
-# of depending on cleanup ordering.
-def _uniqueLogin(prefix):
-    return f"{prefix}{uuid.uuid4().hex[:8]}"
-
-
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    login = _uniqueLogin("historyowner")
-    return User().createUser(
-        login=login,
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email=f"{login}@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def stranger(db):
-    from girder.models.user import User
-
-    login = _uniqueLogin("historystranger")
-    return User().createUser(
-        login=login,
-        password="password123",
-        firstName="N",
-        lastName="A",
-        email=f"{login}@example.com",
-        admin=False,
-    )
 
 
 @pytest.fixture
@@ -93,12 +54,6 @@ def folderB(fsAssetstore, owner):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _reload(job):
-    from girder_jobs.models.job import Job
-
-    return Job().load(job["_id"], force=True)
 
 
 def _makeStampedJob(owner, folder, taskId="OtsuSegmentation", status=None):

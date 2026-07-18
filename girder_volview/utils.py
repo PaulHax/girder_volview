@@ -187,7 +187,7 @@ def _parentItemForFile(file, user=None, itemCache=None):
     if not itemId:
         return None
     if itemCache is None:
-        return Item().load(itemId, user=user, level=AccessType.READ, exc=False)
+        itemCache = {}
     if itemId not in itemCache:
         itemCache[itemId] = Item().load(
             itemId, user=user, level=AccessType.READ, exc=False
@@ -217,7 +217,7 @@ def _loadFolderCached(folderId, folderCache=None):
     if not folderId:
         return None
     if folderCache is None:
-        return Folder().load(folderId, force=True, exc=False)
+        folderCache = {}
     key = str(folderId)
     if key not in folderCache:
         folderCache[key] = Folder().load(folderId, force=True, exc=False)
@@ -233,10 +233,7 @@ def isJobOutputFolderFile(file, user=None, itemCache=None, folderCache=None):
     Best-effort: an absent/unreadable parent item or folder is treated as
     not-a-job-output (fail toward showing the file).
     """
-    item = _parentItemForFile(file, user, itemCache)
-    folderId = item.get("folderId") if isinstance(item, dict) else None
-    folder = _loadFolderCached(folderId, folderCache)
-    return bool((folder or {}).get("meta", {}).get(JOB_OUTPUT_FOLDER_META_KEY))
+    return isJobOutputFolderItem(_parentItemForFile(file, user, itemCache), folderCache)
 
 
 def isJobOutputFolderItem(item, folderCache=None):
@@ -263,6 +260,10 @@ def isTransientStagedFile(file, user=None, itemCache=None):
 
 
 def isLoadableImage(file, user=None, itemCache=None, folderCache=None):
+    # Normalized here so the job-output, transient, and loadable checks below
+    # share one parent-item load even when no request-scoped cache is passed.
+    itemCache = {} if itemCache is None else itemCache
+    folderCache = {} if folderCache is None else folderCache
     if isSessionFile(file):
         return False
     if isJobOutputFolderFile(file, user, itemCache, folderCache):
@@ -270,6 +271,45 @@ def isLoadableImage(file, user=None, itemCache=None, folderCache=None):
     if isTransientStagedFile(file, user, itemCache):
         return False
     return isLoadableFile(file, user, itemCache)
+
+
+def primeLoadableImageCaches(fileDocs, user, itemCache, folderCache):
+    """Batch-fill the request-scoped caches ``isLoadableImage`` reads.
+
+    Per file, ``isLoadableImage`` loads the parent item (transient marker,
+    largeImage/DICOM meta) and that item's parent folder (job-output marker);
+    loaded singly that is ~2 Mongo round trips per distinct item — hundreds for
+    a typical DICOM folder manifest. One permission-filtered item find plus one
+    folder find replaces them. Ids absent from a result (missing or unreadable)
+    are cached as ``None`` so the per-file path never falls back to a singleton
+    load.
+    """
+    itemIds = {f.get("itemId") for f in fileDocs if f.get("itemId")}
+    itemIds -= set(itemCache)
+    if itemIds:
+        found = {
+            itemDoc["_id"]: itemDoc
+            for itemDoc in Item().findWithPermissions(
+                query={"_id": {"$in": list(itemIds)}},
+                user=user,
+                level=AccessType.READ,
+            )
+        }
+        for itemId in itemIds:
+            itemCache[itemId] = found.get(itemId)
+    folderIds = {
+        item["folderId"]
+        for item in itemCache.values()
+        if isinstance(item, dict) and item.get("folderId")
+    }
+    missingFolderIds = [fid for fid in folderIds if str(fid) not in folderCache]
+    if missingFolderIds:
+        found = {
+            str(folderDoc["_id"]): folderDoc
+            for folderDoc in Folder().find({"_id": {"$in": missingFolderIds}})
+        }
+        for folderId in missingFolderIds:
+            folderCache[str(folderId)] = found.get(str(folderId))
 
 
 def makeFileDownloadUrl(fileModel):
@@ -387,6 +427,9 @@ def singleVolViewZipOrImageFiles(
     )
     if newestSession is not None:
         return [newestSession]
+    primeLoadableImageCaches(
+        [fileEntry[1] for fileEntry in fileEntries], user, itemCache, folderCache
+    )
     return [
         fileEntry
         for fileEntry in fileEntries

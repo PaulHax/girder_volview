@@ -13,7 +13,7 @@ unreachable.
 
 import io
 import json
-from conftest import mongo_reachable
+from conftest import _reload, mongo_reachable
 import types
 import uuid
 
@@ -45,56 +45,13 @@ RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
 # ---------------------------------------------------------------------------
-# Real users / folders
+# Real users / folders (shared fixtures live in conftest)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="resultowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="resultowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def stranger(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="resultstranger",
-        password="password123",
-        firstName="N",
-        lastName="A",
-        email="resultstranger@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def ownerFolder(fsAssetstore, owner):
-    from girder.models.folder import Folder
-
-    return Folder().createFolder(
-        owner, "launch", parentType="user", creator=owner, public=False
-    )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _reload(job):
-    from girder_jobs.models.job import Job
-
-    return Job().load(job["_id"], force=True)
 
 
 def _makeBoundJob(owner, launchFolder, cli_xml=_CLI_XML_IMAGE):

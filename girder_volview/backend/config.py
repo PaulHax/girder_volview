@@ -8,25 +8,14 @@ still resolves.
 
 from girder.utility.server import getApiRoot
 
-
-def _providerBaseUrl(folder):
-    # Origin-relative and keyed off getApiRoot() -- the SAME mount
-    # utils.makeFileDownloadUrl and inputs._fileIdFromMintedUri use. Hardcoding
-    # "/api/v1" 404s every submit/status/results/stage call on a non-default
-    # API mount (e.g. /girder/api/v1).
-    return f"/{getApiRoot()}/folder/{folder['_id']}/volview_processing"
+# The mount segment of every processing route: the folder-tree routes
+# (``/folder/:id/volview_processing/...``) and the folder-free job resource
+# (``/volview_processing/...``, see routes.py ``_JobResource``). Shared with the
+# route registration so the advertised URLs and the mounted routes cannot drift.
+PROCESSING_ROUTE_NAME = "volview_processing"
 
 
-# The folder-free root for the job-addressed routes (status/results/cancel),
-# keyed by job id alone and mounted on the ``volview_processing`` resource, a
-# sibling of ``/folder`` (see routes.py ``_JobResource``). Advertised explicitly
-# so the client never string-surgeries the folder segment out of ``baseUrl``. A
-# function because it derives from the runtime ``getApiRoot()``.
-def _jobsBaseUrl():
-    return f"/{getApiRoot()}/volview_processing"
-
-
-def _providerConfigForFolder(folder):
+def buildProcessingConfigBlock(folder):
     # The block advertises only where to reach the provider, never what is
     # loaded: the client mints its own input refs from the on-screen volume's
     # provenance. The client zod schema (`src/processing/config.ts`
@@ -39,15 +28,24 @@ def _providerConfigForFolder(folder):
     # "girder-slicer-cli" would make both folders share one mutable identity. The
     # label carries the folder name so the picker distinguishes them (fall back to
     # bare "Analysis" when a folder document has no name).
+    #
+    # Both URLs are origin-relative and keyed off getApiRoot() -- the SAME mount
+    # utils.makeFileDownloadUrl and inputs._fileIdFromMintedUri use. Hardcoding
+    # "/api/v1" 404s every submit/status/results/stage call on a non-default API
+    # mount (e.g. /girder/api/v1). jobsBaseUrl is the folder-free root for the
+    # job-addressed routes (status/results/cancel), advertised explicitly so the
+    # client never string-surgeries the folder segment out of baseUrl.
     folderName = folder.get("name")
     return {
-        "id": "girder-slicer-cli:%s" % folder["_id"],
-        "label": "Analysis — %s" % folderName if folderName else "Analysis",
-        "baseUrl": _providerBaseUrl(folder),
-        "jobsBaseUrl": _jobsBaseUrl(),
-        "context": {},
+        "providers": [
+            {
+                "id": "girder-slicer-cli:%s" % folder["_id"],
+                "label": "Analysis — %s" % folderName if folderName else "Analysis",
+                "baseUrl": (
+                    f"/{getApiRoot()}/folder/{folder['_id']}/{PROCESSING_ROUTE_NAME}"
+                ),
+                "jobsBaseUrl": f"/{getApiRoot()}/{PROCESSING_ROUTE_NAME}",
+                "context": {},
+            }
+        ]
     }
-
-
-def buildProcessingConfigBlock(folder):
-    return {"providers": [_providerConfigForFolder(folder)]}

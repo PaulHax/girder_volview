@@ -15,7 +15,6 @@ import re
 import contract_loader
 from girder_volview.backend import routes
 
-_OPENAPI = contract_loader.GENERATED_ROOT / "openapi.json"
 
 # Neutral operationId -> the reference-backend handler that implements it. A NEW
 # backend re-authors this mapping; for the reference backend every handler exists.
@@ -55,10 +54,6 @@ _FORBIDDEN = [
 ]
 
 
-def _load_openapi():
-    return json.loads(_OPENAPI.read_text())
-
-
 def _declared_operation_ids(doc):
     return {
         op["operationId"]
@@ -68,17 +63,17 @@ def _declared_operation_ids(doc):
 
 
 def test_openapi_present_and_is_openapi_3_1():
-    assert _OPENAPI.exists()
-    assert _load_openapi()["openapi"].startswith("3.1")
+    assert contract_loader.OPENAPI_PATH.exists()
+    assert contract_loader.load_openapi()["openapi"].startswith("3.1")
 
 
 def test_openapi_declares_exactly_the_neutral_operations():
     expected = set(_OP_TO_HANDLER) | _DECLARED_NOT_YET_IMPLEMENTED
-    assert _declared_operation_ids(_load_openapi()) == expected
+    assert _declared_operation_ids(contract_loader.load_openapi()) == expected
 
 
 def test_reference_backend_implements_every_declared_operation():
-    for op_id in _declared_operation_ids(_load_openapi()):
+    for op_id in _declared_operation_ids(contract_loader.load_openapi()):
         if op_id in _DECLARED_NOT_YET_IMPLEMENTED:
             continue
         handler = _OP_TO_HANDLER[op_id]
@@ -86,7 +81,7 @@ def test_reference_backend_implements_every_declared_operation():
 
 
 def test_job_addressed_routes_are_keyed_by_job_id_alone():
-    doc = _load_openapi()
+    doc = contract_loader.load_openapi()
     for path, path_item in doc["paths"].items():
         for op in path_item.values():
             if op["operationId"] in (
@@ -101,6 +96,6 @@ def test_job_addressed_routes_are_keyed_by_job_id_alone():
 
 
 def test_openapi_leaks_nothing_girder_specific():
-    serialized = json.dumps(_load_openapi())
+    serialized = json.dumps(contract_loader.load_openapi())
     for label, pattern in _FORBIDDEN:
         assert not pattern.search(serialized), label

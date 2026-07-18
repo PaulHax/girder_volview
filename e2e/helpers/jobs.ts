@@ -1,19 +1,9 @@
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
+import { readJson } from './http';
 
 // Processing-job REST helpers — submit a task and poll it to a terminal state,
 // mirroring the requests the browser client mints.
-
-async function readJson(res: import('@playwright/test').APIResponse, ctx: string): Promise<any> {
-  const status = res.status();
-  const text = await res.text();
-  if (status >= 300) throw new Error(`[e2e] ${ctx} failed: HTTP ${status} ${text.slice(0, 400)}`);
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`[e2e] ${ctx}: non-JSON response: ${text.slice(0, 200)}`);
-  }
-}
 
 // The proxiable URI the backend resolves back to a Girder file id (and re-checks
 // READ ACL): origin-relative /{apiRoot}/file/<id>/proxiable/<name>.

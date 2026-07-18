@@ -21,20 +21,17 @@ Offline: pure string math, no Mongo.
 import pytest
 from bson.objectid import ObjectId
 
+from conftest import API_ROOT
 import contract_loader
 from girder_volview import handles
 from girder_volview.backend import inputs
 from girder_volview.utils import makeFileDownloadUrl
 
 
-API_ROOT = "api/v1"
-
-
-@pytest.fixture(autouse=True)
-def _fixed_api_root(monkeypatch):
-    # Deterministic mount so the corpus exemplars' ``/api/v1/...`` handles
-    # compare byte-for-byte regardless of ambient server config.
-    monkeypatch.setattr(handles, "getApiRoot", lambda: API_ROOT)
+# The shared ``_fixed_api_root`` pin (conftest) keeps the corpus exemplars'
+# ``/api/v1/...`` handles byte-for-byte comparable regardless of ambient
+# server config.
+pytestmark = pytest.mark.usefixtures("_fixed_api_root")
 
 
 _CORPUS = contract_loader.load_fixture("wire/handle-roundtrip.json")

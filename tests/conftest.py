@@ -1,7 +1,11 @@
 """Shared test scaffolding for the Mongo-backed route suites."""
 
+import io
 import os
 import socket
+import uuid
+
+import pytest
 
 
 def mongo_reachable(timeout=0.5):
@@ -25,3 +29,221 @@ def mongo_reachable(timeout=0.5):
             return True
     except OSError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Users / launch folder
+# ---------------------------------------------------------------------------
+
+
+def makeUser(login, admin=False):
+    """Create a user whose login is uniquified from ``login``.
+
+    Unique per-test logins: under serial full-suite runs the girder db fixture
+    leaks state across tests (a fixed login "already exists" even though the
+    fixture reports a fresh database). Unique identities sidestep the leak
+    instead of depending on cleanup ordering.
+    """
+    from girder.models.user import User
+
+    unique = f"{login}{uuid.uuid4().hex[:8]}"
+    return User().createUser(
+        login=unique,
+        password="password123",
+        firstName="A",
+        lastName="B",
+        email=f"{unique}@example.com",
+        admin=admin,
+    )
+
+
+@pytest.fixture
+def owner(db):
+    return makeUser("owner")
+
+
+@pytest.fixture
+def stranger(db):
+    return makeUser("stranger")
+
+
+@pytest.fixture
+def ownerFolder(fsAssetstore, owner):
+    from girder.models.folder import Folder
+
+    return Folder().createFolder(
+        owner, "launch", parentType="user", creator=owner, public=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deterministic api root
+# ---------------------------------------------------------------------------
+
+
+API_ROOT = "api/v1"
+
+
+@pytest.fixture
+def _fixed_api_root(monkeypatch):
+    # Deterministic mount so the corpus exemplars' ``/api/v1/...`` handles
+    # compare byte-for-byte regardless of ambient server config. NOT autouse:
+    # modules that need the pin request it explicitly.
+    from girder_volview import handles
+
+    monkeypatch.setattr(handles, "getApiRoot", lambda: API_ROOT)
+
+
+# ---------------------------------------------------------------------------
+# Job helpers -- a job that OWNS a real private output folder, driven through
+# the real girder_jobs state machine
+# ---------------------------------------------------------------------------
+
+
+def _reload(job):
+    """Reload a job by document or bare id."""
+    from girder_jobs.models.job import Job
+
+    jobId = job["_id"] if isinstance(job, dict) else job
+    return Job().load(jobId, force=True)
+
+
+def _drive(job, status):
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    paths = {
+        JobStatus.QUEUED: [JobStatus.QUEUED],
+        JobStatus.RUNNING: [JobStatus.QUEUED, JobStatus.RUNNING],
+        JobStatus.SUCCESS: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCESS],
+        JobStatus.ERROR: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.ERROR],
+    }
+    for s in paths.get(status, []):
+        job = Job().updateJob(_reload(job), status=s)
+    return _reload(job)
+
+
+def _makeOwnedJob(owner, launchFolder, status=None, public=False):
+    """A job owning a REAL private output folder (created exactly as runTask does)."""
+    from girder_jobs.models.job import Job
+
+    from girder_volview.backend import inputs, outputs, routes
+
+    outputFolder = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    job = Job().createJob(
+        title="t",
+        type="volview_test",
+        user=owner,
+        public=public,
+        otherFields={
+            outputs._OUTPUT_FOLDER_ID_FIELD: str(outputFolder["_id"]),
+            inputs._LAUNCH_FOLDER_FIELD: str(launchFolder["_id"]),
+            outputs._OUTPUTS_FIELD: {},
+        },
+    )
+    if status is not None:
+        job = _drive(job, status)
+    return _reload(job), outputFolder
+
+
+def _stageTransientInput(owner, launchFolder, job):
+    """Stage a transient input item and record it on the (already terminal) job.
+
+    Stamped AFTER the job is terminal so the terminal-state transient cleanup did
+    not already remove it -- the DELETE cascade is then the unambiguous remover."""
+    from girder.models.item import Item
+    from girder.models.upload import Upload
+    from girder_jobs.models.job import Job
+
+    from girder_volview.utils import TRANSIENT_STAGED_META_KEY
+
+    fileDoc = Upload().uploadFromFile(
+        io.BytesIO(b"seg-bytes"),
+        size=9,
+        name="staged.seg.nrrd",
+        parentType="folder",
+        parent=launchFolder,
+        user=owner,
+    )
+    itemId = fileDoc["itemId"]
+    Item().setMetadata(
+        Item().load(itemId, force=True), {TRANSIENT_STAGED_META_KEY: True}
+    )
+    Job().collection.update_one(
+        {"_id": job["_id"]},
+        {"$set": {TRANSIENT_STAGED_META_KEY: [str(itemId)]}},
+    )
+    return itemId
+
+
+def _folderExists(folderId):
+    from girder.models.folder import Folder
+
+    return Folder().load(folderId, force=True, exc=False) is not None
+
+
+def _jobExists(jobId):
+    from girder_jobs.models.job import Job
+
+    return Job().load(jobId, force=True, exc=False) is not None
+
+
+def _itemExists(itemId):
+    from girder.models.item import Item
+
+    return Item().load(itemId, force=True, exc=False) is not None
+
+
+# ---------------------------------------------------------------------------
+# Upload / manifest helpers
+# ---------------------------------------------------------------------------
+
+
+def _uploadFile(folder, user, name, data=b"pixels", meta=None):
+    """Upload one file into ``folder``; return (item, file)."""
+    from girder.models.item import Item
+    from girder.models.upload import Upload
+
+    fileDoc = Upload().uploadFromFile(
+        io.BytesIO(data),
+        size=len(data),
+        name=name,
+        parentType="folder",
+        parent=folder,
+        user=user,
+    )
+    item = Item().load(fileDoc["itemId"], force=True)
+    if meta:
+        item = Item().setMetadata(item, meta)
+    return item, fileDoc
+
+
+def _folderManifest(server, folder, user, params=None, **kwargs):
+    return server.request(
+        path="/folder/%s/volview" % folder["_id"],
+        method="GET",
+        user=user,
+        params=params or {},
+        isJson=True,
+        **kwargs,
+    )
+
+
+def _itemManifest(server, item, user, **kwargs):
+    return server.request(
+        path="/item/%s/volview" % item["_id"],
+        method="GET",
+        user=user,
+        isJson=True,
+        **kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fakes (no live Girder)
+# ---------------------------------------------------------------------------
+
+
+class _Event:
+    def __init__(self, info):
+        self.info = info

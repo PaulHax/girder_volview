@@ -34,6 +34,7 @@ from ..utils import (
     SESSION_ZIP_EXTENSION,
     isJobOutputFolderItem,
     isLoadableImage,
+    primeLoadableImageCaches,
     filesToManifest,
     singleVolViewZipOrImageFiles,
     getFilteredFiles,
@@ -133,13 +134,32 @@ def _saveResponse(sessionItemId):
     only the ``resumeUrl`` (``item/:id/volview``), which it repoints ONLY its
     reload (``urls=``) at. So a later F5 reloads exactly this save, while the
     save target (``save=``) stays launch-provided — a folder-scoped save mints
-    a new ``session.volview.zip`` item on every save. Returns ``{}`` (no
-    resumeUrl) when no session item resolved — a fail-safe no-op the client
-    ignores.
+    a new ``session.volview.zip`` item on every save.
     """
-    if sessionItemId is None:
-        return {}
     return {"resumeUrl": f"/{getApiRoot()}/item/{sessionItemId}/volview"}
+
+
+def _uploadWholeSession(model, parentId, user, errorIdentifier, metadata=None):
+    """Upload the session zip in one shot; 400 unless it finalized into a File.
+
+    Only a finalized File carries ``itemId``. A resumable/partial upload (a
+    processor content-type, or a body shorter than the declared Content-Length)
+    returns the raw Upload doc with no ``itemId``; the single-shot save contract
+    can't continue, so fail with a clean 400 rather than report a success F5
+    would contradict by restoring the previous zip (or a KeyError -> 500 and an
+    orphaned item).
+    """
+    size = int(cherrypy.request.headers.get("Content-Length"))
+    if size == 0:
+        raise GirderException(
+            "Expected non-zero Content-Length header", errorIdentifier
+        )
+    fileDic = uploadSession(model, parentId, user, size, metadata)
+    if "itemId" not in fileDic:
+        raise RestException(
+            "Session save must upload the whole zip in one request.", code=400
+        )
+    return fileDic
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -150,20 +170,9 @@ def _saveResponse(sessionItemId):
     .errorResponse()
 )
 def saveToItem(self, itemId):
-    size = int(cherrypy.request.headers.get("Content-Length"))
-    if size == 0:
-        raise GirderException(
-            "Expected non-zero Content-Length header", "girder.api.v1.item.save-volview"
-        )
-
-    fileDic = uploadSession(Item, itemId, self.getCurrentUser(), size)
-    if "itemId" not in fileDic:
-        # Only a finalized File carries itemId. A partial/resumable upload must
-        # not report success -- the client would show a clean save while F5
-        # restores the previous zip.
-        raise RestException(
-            "Session save must upload the whole zip in one request.", code=400
-        )
+    _uploadWholeSession(
+        Item, itemId, self.getCurrentUser(), "girder.api.v1.item.save-volview"
+    )
     # The session file is stuffed into this same item, so its own manifest URL
     # is both the save target and the F5 reload target.
     return _saveResponse(itemId)
@@ -182,22 +191,9 @@ def saveToItem(self, itemId):
 )
 def saveToFolder(self, folderId, metadata):
     user = self.getCurrentUser()
-    size = int(cherrypy.request.headers.get("Content-Length"))
-    if size == 0:
-        raise GirderException(
-            "Expected non-zero Content-Length header",
-            "girder.api.v1.folder.volview_save",
-        )
-    fileDic = uploadSession(Folder, folderId, user, size, metadata)
-    if "itemId" not in fileDic:
-        # uploadSession only yields an itemId once the upload finalizes into a
-        # File. A resumable/partial upload (a processor content-type, or a body
-        # shorter than the declared Content-Length) returns the raw Upload doc
-        # with no itemId; the single-shot save contract can't continue, so fail
-        # with a clean 400 rather than a KeyError -> 500 (and an orphaned item).
-        raise RestException(
-            "Session save must upload the whole zip in one request.", code=400
-        )
+    fileDic = _uploadWholeSession(
+        Folder, folderId, user, "girder.api.v1.folder.volview_save", metadata
+    )
     # Rebase this save's linkedResources onto the newest already-saved session in
     # the selection set: a save from a checked-session open would otherwise stamp
     # linkedResources={items:[S]} instead of S's own lineage. Load-bearing for
@@ -313,6 +309,7 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         # filter row (newest filter save).
         selectedFolders = loadModels(user, Folder, folders)
         files = getFiles(Folder, selectedFolders) + getFiles(Item, selectedItems)
+        primeLoadableImageCaches([f[1] for f in files], user, itemCache, folderCache)
         files = [
             f for f in files if isLoadableImage(f[1], user, itemCache, folderCache)
         ]
@@ -323,6 +320,7 @@ def downloadResourceManifest(self, folder, folders, items, filters):
             # Narrow to loadable images: the filter aggregation returns every
             # matched file, but transient staged inputs and job-output-folder
             # files must not surface as launch data.
+            primeLoadableImageCaches(files, user, itemCache, folderCache)
             files = [
                 (None, f)
                 for f in files

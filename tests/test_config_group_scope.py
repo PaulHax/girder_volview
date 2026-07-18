@@ -30,18 +30,7 @@ _GROUPS_ONLY_YAML = (
 )
 
 
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="groupcfgowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="groupcfgowner@example.com",
-        admin=False,
-    )
+# The shared ``owner`` fixture lives in conftest.
 
 
 @pytest.fixture

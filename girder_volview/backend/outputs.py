@@ -22,8 +22,8 @@ from girder.exceptions import RestException
 from girder.models.folder import Folder
 from girder.models.item import Item
 
-from ..utils import JOB_OUTPUT_FOLDER_META_KEY
-from .inputs import _removeTransientItems, _TRANSIENT_META_KEY
+from ..utils import JOB_OUTPUT_FOLDER_META_KEY, TRANSIENT_STAGED_META_KEY
+from .inputs import _removeTransientItems
 
 # Backend-owned job fields (otherFields, not a schema change). The id map is
 # READ-exposed (``routes.addBackendRoutes``); the job's own ACL is the gate.
@@ -167,7 +167,7 @@ def _cascadeDeleteJobOwnedResources(event):
     if not isinstance(job, dict):
         return
     folderId = job.get(_OUTPUT_FOLDER_ID_FIELD)
-    transientItemIds = job.get(_TRANSIENT_META_KEY) or []
+    transientItemIds = job.get(TRANSIENT_STAGED_META_KEY) or []
     if not folderId and not transientItemIds:
         return  # not an owned job -- do not interfere with standard removal
     if folderId:

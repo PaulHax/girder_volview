@@ -17,14 +17,22 @@ Needs a live pytest-girder server + Mongo; the module self-skips when the test
 Mongo is unreachable.
 """
 
-import io
 import json
-from conftest import mongo_reachable
+from conftest import (
+    _folderExists,
+    _itemExists,
+    _jobExists,
+    _makeOwnedJob,
+    _reload,
+    _stageTransientInput,
+    makeUser,
+    mongo_reachable,
+)
 import uuid
 
 import pytest
 
-from girder_volview.backend import inputs, outputs, routes
+from girder_volview.backend import outputs, routes
 from girder_volview.utils import JOB_OUTPUT_FOLDER_META_KEY
 
 
@@ -36,121 +44,18 @@ pytestmark = pytest.mark.skipif(
 
 
 # ---------------------------------------------------------------------------
-# Users / launch folder
+# Users / launch folder (shared fixtures + helpers live in conftest)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="cascadeowner",
-        password="password123",
-        firstName="C",
-        lastName="O",
-        email="cascadeowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def launchFolder(fsAssetstore, owner):
-    from girder.models.folder import Folder
-
-    return Folder().createFolder(
-        owner, "launch", parentType="user", creator=owner, public=False
-    )
+def launchFolder(ownerFolder):
+    return ownerFolder
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _reload(job):
-    from girder_jobs.models.job import Job
-
-    return Job().load(job["_id"], force=True)
-
-
-def _drive(job, status):
-    from girder_jobs.constants import JobStatus
-    from girder_jobs.models.job import Job
-
-    paths = {
-        JobStatus.QUEUED: [JobStatus.QUEUED],
-        JobStatus.RUNNING: [JobStatus.QUEUED, JobStatus.RUNNING],
-        JobStatus.SUCCESS: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.SUCCESS],
-        JobStatus.ERROR: [JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.ERROR],
-    }
-    for s in paths.get(status, []):
-        job = Job().updateJob(_reload(job), status=s)
-    return _reload(job)
-
-
-def _makeOwnedJob(owner, launchFolder, status=None):
-    """A job owning a REAL private output folder (created exactly as runTask does)."""
-    from girder_jobs.models.job import Job
-
-    outputFolder = routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
-    job = Job().createJob(
-        title="t",
-        type="volview_test",
-        user=owner,
-        public=False,
-        otherFields={
-            outputs._OUTPUT_FOLDER_ID_FIELD: str(outputFolder["_id"]),
-            inputs._LAUNCH_FOLDER_FIELD: str(launchFolder["_id"]),
-            outputs._OUTPUTS_FIELD: {},
-        },
-    )
-    if status is not None:
-        job = _drive(job, status)
-    return _reload(job), outputFolder
-
-
-def _stageTransientInput(owner, launchFolder, job):
-    """Stage a transient input item and record it on the (already terminal) job."""
-    from girder.models.item import Item
-    from girder.models.upload import Upload
-    from girder_jobs.models.job import Job
-
-    fileDoc = Upload().uploadFromFile(
-        io.BytesIO(b"seg-bytes"),
-        size=9,
-        name="staged.seg.nrrd",
-        parentType="folder",
-        parent=launchFolder,
-        user=owner,
-    )
-    itemId = fileDoc["itemId"]
-    Item().setMetadata(
-        Item().load(itemId, force=True), {inputs._TRANSIENT_META_KEY: True}
-    )
-    Job().collection.update_one(
-        {"_id": job["_id"]},
-        {"$set": {inputs._TRANSIENT_META_KEY: [str(itemId)]}},
-    )
-    return itemId
-
-
-def _folderExists(folderId):
-    from girder.models.folder import Folder
-
-    return Folder().load(folderId, force=True, exc=False) is not None
-
-
-def _jobExists(jobId):
-    from girder_jobs.models.job import Job
-
-    return Job().load(jobId, force=True, exc=False) is not None
-
-
-def _itemExists(itemId):
-    from girder.models.item import Item
-
-    return Item().load(itemId, force=True, exc=False) is not None
 
 
 def _container(launchFolder):
@@ -503,16 +408,7 @@ def test_container_create_race_does_not_adopt(server, owner, launchFolder, monke
 
 @pytest.fixture
 def admin(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="cascadeadmin",
-        password="password123",
-        firstName="A",
-        lastName="D",
-        email="cascadeadmin@example.com",
-        admin=True,
-    )
+    return makeUser("cascadeadmin", admin=True)
 
 
 def _collectionLaunchFolder(owner, name="cascade-collection"):

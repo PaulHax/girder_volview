@@ -14,10 +14,9 @@
 """
 
 import datetime
-import io
 import json
 import re
-from conftest import mongo_reachable
+from conftest import _folderManifest, _itemManifest, _uploadFile, mongo_reachable
 
 import pytest
 
@@ -31,50 +30,14 @@ pytestmark = pytest.mark.skipif(
 
 
 # ---------------------------------------------------------------------------
-# Fixtures + helpers
+# Fixtures + helpers (shared owner fixture + upload/manifest helpers live in
+# conftest)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="saveowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="saveowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def folder(fsAssetstore, owner):
-    from girder.models.folder import Folder
-
-    return Folder().createFolder(
-        owner, "launch", parentType="user", creator=owner, public=False
-    )
-
-
-def _uploadFile(folder, user, name, data=b"pixels", meta=None):
-    """Upload one file into ``folder``; return (item, file)."""
-    from girder.models.item import Item
-    from girder.models.upload import Upload
-
-    fileDoc = Upload().uploadFromFile(
-        io.BytesIO(data),
-        size=len(data),
-        name=name,
-        parentType="folder",
-        parent=folder,
-        user=user,
-    )
-    item = Item().load(fileDoc["itemId"], force=True)
-    if meta:
-        item = Item().setMetadata(item, meta)
-    return item, fileDoc
+def folder(ownerFolder):
+    return ownerFolder
 
 
 def _ageFile(fileDoc, hours):
@@ -83,27 +46,6 @@ def _ageFile(fileDoc, hours):
 
     fileDoc["created"] = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
     return File().save(fileDoc)
-
-
-def _folderManifest(server, folder, user, params=None, **kwargs):
-    return server.request(
-        path="/folder/%s/volview" % folder["_id"],
-        method="GET",
-        user=user,
-        params=params or {},
-        isJson=True,
-        **kwargs,
-    )
-
-
-def _itemManifest(server, item, user, **kwargs):
-    return server.request(
-        path="/item/%s/volview" % item["_id"],
-        method="GET",
-        user=user,
-        isJson=True,
-        **kwargs,
-    )
 
 
 def _resourceNames(resp):

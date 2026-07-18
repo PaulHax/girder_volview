@@ -5,14 +5,13 @@ enum on the wire). Results come from the file ids recorded ON the job by
 ``outputs._recordJobOutput`` -- reference-bound, never a folder-name scan.
 """
 
+import functools
+
 from bson.objectid import ObjectId
 from girder import logger
-from girder.constants import AccessType
-from girder.models.file import File
-from girder.models.item import Item
 
 from ..utils import makeFileDownloadUrl, _toIso
-from .inputs import _TASK_ID_FIELD
+from .inputs import _TASK_ID_FIELD, readableFilesById
 from .outputs import (
     _OUTPUTS_FIELD,
     _OUTPUT_SPECS_FIELD,
@@ -25,13 +24,20 @@ from .outputs import (
 # ---------------------------------------------------------------------------
 
 
-# Built on first use and cached module-level: both depend on late imports
-# (girder_jobs / girder_worker) unavailable at module import time.
-_WORKER_ACTIVE_STATES = None
-_STATE_MAP = None
+# The maps below are built on first use and cached (``functools.cache``): they
+# depend on late imports (girder_jobs / girder_worker) unavailable at module
+# import time.
 
 
-def _computeWorkerActiveStates():
+@functools.cache
+def _workerActiveStates():
+    """girder_worker ``CustomJobStatus`` active-state codes (with numeric fallback).
+
+    Core's ``JobStatus`` map has no entry for these, so without them a running job
+    would default to ``"pending"`` and a polling client would see it REGRESS. The
+    numeric literals are the stable wire integers used when girder_worker (an
+    optional runtime dependency) is not importable.
+    """
     try:
         from girder_worker.utils import CustomJobStatus
 
@@ -52,42 +58,19 @@ def _computeWorkerActiveStates():
         }
 
 
-def _workerActiveStates():
-    """girder_worker ``CustomJobStatus`` active-state codes (with numeric fallback).
-
-    Core's ``JobStatus`` map has no entry for these, so without them a running job
-    would default to ``"pending"`` and a polling client would see it REGRESS. The
-    numeric literals are the stable wire integers used when girder_worker (an
-    optional runtime dependency) is not importable.
-    """
-    global _WORKER_ACTIVE_STATES
-    if _WORKER_ACTIVE_STATES is None:
-        _WORKER_ACTIVE_STATES = _computeWorkerActiveStates()
-    return _WORKER_ACTIVE_STATES
-
-
+@functools.cache
 def _jobStateMap():
-    """The girder ``JobStatus`` -> neutral projected-state map, built once.
+    """The girder ``JobStatus`` -> neutral projected-state map, built once."""
+    from girder_jobs.constants import JobStatus
 
-    girder_jobs constants are not importable until the plugin's dependency is
-    loaded, so the map is built lazily and cached.
-    """
-    global _STATE_MAP
-    if _STATE_MAP is None:
-        from girder_jobs.constants import JobStatus
-
-        _STATE_MAP = {
-            JobStatus.INACTIVE: "pending",
-            JobStatus.QUEUED: "pending",
-            JobStatus.RUNNING: "running",
-            JobStatus.SUCCESS: "success",
-            JobStatus.ERROR: "error",
-            JobStatus.CANCELED: "cancelled",
-        }
-    return _STATE_MAP
-
-
-_TERMINAL_STATUSES = None
+    return {
+        JobStatus.INACTIVE: "pending",
+        JobStatus.QUEUED: "pending",
+        JobStatus.RUNNING: "running",
+        JobStatus.SUCCESS: "success",
+        JobStatus.ERROR: "error",
+        JobStatus.CANCELED: "cancelled",
+    }
 
 
 def isTerminalStatus(status):
@@ -100,16 +83,12 @@ def isTerminalStatus(status):
     return status in terminalStatuses()
 
 
+@functools.cache
 def terminalStatuses():
     """The terminal ``JobStatus`` set itself (for Mongo ``$nin`` queries)."""
-    global _TERMINAL_STATUSES
-    if _TERMINAL_STATUSES is None:
-        from girder_jobs.constants import JobStatus
+    from girder_jobs.constants import JobStatus
 
-        _TERMINAL_STATUSES = frozenset(
-            {JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED}
-        )
-    return _TERMINAL_STATUSES
+    return frozenset({JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED})
 
 
 def _projectJobState(job):
@@ -354,13 +333,11 @@ def _readableOutputFilesForJobs(jobs, user):
     its whole page, and ``_projectJobFacts`` routes single-job status/result
     reads through it too, so the ACL semantics cannot drift between endpoints.
     The recorded/missing counts are readability-aware, so the ACL check is
-    load-bearing. Girder files inherit access through items, and its generic file
-    permission query falls back to per-item loads; two bounded queries are used
-    instead: fetch the referenced files, then permission-filter their distinct
-    parent items. Files with invalid ids, missing parents, or unreadable parents
-    are absent from the map and therefore count as missing. The returned map is
-    keyed by string id because persisted output ids and model documents may use
-    different ObjectId/string representations. The projection carries
+    load-bearing; ``inputs.readableFilesById`` is the shared batched boundary.
+    Files with invalid ids, missing parents, or unreadable parents are absent
+    from the map and therefore count as missing. The returned map is keyed by
+    string id because persisted output ids and model documents may use different
+    ObjectId/string representations. The projection carries
     ``name``/``mimeType``/``size`` because ``_collectJobResults`` builds result
     intents (download url + file metadata) from these same docs.
     """
@@ -379,30 +356,11 @@ def _readableOutputFilesForJobs(jobs, user):
             fileIdsByString.setdefault(str(objectId), objectId)
     if not fileIdsByString:
         return {}
-    fileDocs = list(
-        File().find(
-            query={"_id": {"$in": list(fileIdsByString.values())}},
-            fields={"_id": 1, "itemId": 1, "name": 1, "mimeType": 1, "size": 1},
-        )
+    return readableFilesById(
+        fileIdsByString.values(),
+        user,
+        fields={"_id": 1, "itemId": 1, "name": 1, "mimeType": 1, "size": 1},
     )
-    itemIds = {fileDoc.get("itemId") for fileDoc in fileDocs}
-    itemIds.discard(None)
-    if not itemIds:
-        return {}
-    readableItemIds = {
-        itemDoc["_id"]
-        for itemDoc in Item().findWithPermissions(
-            query={"_id": {"$in": list(itemIds)}},
-            fields={"_id": 1},
-            user=user,
-            level=AccessType.READ,
-        )
-    }
-    return {
-        str(fileDoc["_id"]): fileDoc
-        for fileDoc in fileDocs
-        if fileDoc.get("itemId") in readableItemIds
-    }
 
 
 def _collectJobResults(job, user, facts=None):

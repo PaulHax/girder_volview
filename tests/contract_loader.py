@@ -58,6 +58,12 @@ def _resolve_contract_root():
 CONTRACT_ROOT = _resolve_contract_root()
 FIXTURES_ROOT = CONTRACT_ROOT / "fixtures"
 GENERATED_ROOT = CONTRACT_ROOT / "generated"
+OPENAPI_PATH = GENERATED_ROOT / "openapi.json"
+
+
+def load_openapi():
+    """Load the published neutral OpenAPI document."""
+    return json.loads(OPENAPI_PATH.read_text())
 
 
 def load_fixture(rel_path):

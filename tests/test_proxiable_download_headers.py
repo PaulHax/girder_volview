@@ -30,31 +30,8 @@ PROXIABLE_PATH = "/file/%s/proxiable/%s"
 
 
 # ---------------------------------------------------------------------------
-# Real user / folder / file
+# Real user / folder / file (shared owner/ownerFolder fixtures live in conftest)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="proxyowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="proxyowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def ownerFolder(fsAssetstore, owner):
-    from girder.models.folder import Folder
-
-    return Folder().createFolder(
-        owner, "launch", parentType="user", creator=owner, public=False
-    )
 
 
 def _upload(user, folder, name, content=b"pixel-bytes"):

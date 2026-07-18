@@ -60,50 +60,87 @@ def resolveInputUrisToFiles(uris, user):
     return _readableFilesInOrder(fileIds, user)
 
 
-def _readableFilesInOrder(fileIds, user):
-    """Load READ-authorized file docs for ``fileIds``, batched, in input order.
+def readableFilesById(fileObjectIds, user, fields=None):
+    """Load the file docs whose parent item ``user`` can READ, batched.
 
-    Girder files inherit access through their parent item, and ``File().load``
-    with a user+level runs a per-file ACL that falls back to loading that parent
-    -- ~2 Mongo queries EACH (≈600 for a 300-slice DICOM series). Batched
-    instead: one ``File().find`` for every id, then ONE permission-filtered
-    ``Item().findWithPermissions`` over the distinct parent items. The ACL
-    boundary is identical -- a file whose parent item the user cannot READ (or a
-    missing file/parent) raises ``AccessException``.
-    ``_fileIdFromMintedUri`` already validated each id's shape, so the
-    ``ObjectId`` conversion cannot fail here.
-
-    Ordering matches the input ``fileIds`` (a comma-joined multi-file volume
-    forwards ids positionally), and a repeated id resolves to the same doc.
+    THE one ACL boundary for bulk file reads: a file is readable iff its parent
+    item is READable. Girder files inherit access through their parent item, and
+    ``File().load`` with a user+level runs a per-file ACL that falls back to
+    loading that parent -- ~2 Mongo queries EACH (≈600 for a 300-slice DICOM
+    series). Batched instead: one ``File().find`` for every id, then ONE
+    permission-filtered ``Item().findWithPermissions`` over the distinct parent
+    items. Returns ``{str(fileId): fileDoc}``; a missing file, missing parent,
+    or unreadable parent is simply absent, and lenient/strict handling stays
+    with the callers.
     """
-    objectIds = [ObjectId(fileId) for fileId in fileIds]
-    filesById = {
-        str(fileDoc["_id"]): fileDoc
-        for fileDoc in File().find(query={"_id": {"$in": objectIds}})
-    }
-    itemIds = {fileDoc.get("itemId") for fileDoc in filesById.values()}
-    itemIds.discard(None)
-    readableItemIds = (
-        {
-            itemDoc["_id"]
-            for itemDoc in Item().findWithPermissions(
-                query={"_id": {"$in": list(itemIds)}},
-                user=user,
-                level=AccessType.READ,
-            )
-        }
-        if itemIds
-        else set()
+    fileDocs = list(
+        File().find(query={"_id": {"$in": list(fileObjectIds)}}, fields=fields)
     )
+    itemIds = {fileDoc.get("itemId") for fileDoc in fileDocs}
+    itemIds.discard(None)
+    if not itemIds:
+        return {}
+    readableItemIds = {
+        itemDoc["_id"]
+        for itemDoc in Item().findWithPermissions(
+            query={"_id": {"$in": list(itemIds)}},
+            fields={"_id": 1},
+            user=user,
+            level=AccessType.READ,
+        )
+    }
+    return {
+        str(fileDoc["_id"]): fileDoc
+        for fileDoc in fileDocs
+        if fileDoc.get("itemId") in readableItemIds
+    }
+
+
+def _readableFilesInOrder(fileIds, user):
+    """Load READ-authorized file docs for ``fileIds``, in input order, raising.
+
+    A strict adapter over :func:`readableFilesById`: any unreadable id raises
+    ``AccessException``. ``_fileIdFromMintedUri`` already validated each id's
+    shape, so the ``ObjectId`` conversion cannot fail here. Ordering matches the
+    input ``fileIds`` (a comma-joined multi-file volume forwards ids
+    positionally), and a repeated id resolves to the same doc.
+    """
+    filesById = readableFilesById([ObjectId(fileId) for fileId in fileIds], user)
     files = []
     for fileId in fileIds:
         fileDoc = filesById.get(fileId)
-        if fileDoc is None or fileDoc.get("itemId") not in readableItemIds:
+        if fileDoc is None:
             # Missing file, missing parent, or a parent the user cannot READ:
             # possession of a (by-design recoverable) id is not a capability.
             raise AccessException("Read access denied for file %s." % fileId)
         files.append(fileDoc)
     return files
+
+
+def validateStagedDescriptor(descriptor, user):
+    """Validate a staged-resource descriptor end to end; return its name.
+
+    Owns the whole descriptor schema — shape, the ``labelmap`` type
+    discriminator, and the reference image (own-scheme + ACL + durable) — so the
+    ``stageInput`` route stays transport + authorization only and a future
+    staged type extends this one validator.
+    """
+    if set(descriptor) != {"type", "name", "referenceImage"}:
+        raise RestException("Malformed staged resource descriptor", code=400)
+    if descriptor.get("type") != "labelmap":
+        raise RestException("Staged resource type must be labelmap", code=400)
+    name = descriptor.get("name")
+    if not isinstance(name, str) or not name:
+        raise RestException("Staged resource name must not be empty", code=400)
+    referenceImage = descriptor.get("referenceImage")
+    if not isinstance(referenceImage, dict):
+        raise RestException("Staged labelmap requires a reference image", code=400)
+    if not set(referenceImage).issubset({"type", "format", "uris"}):
+        raise RestException("Malformed staged reference image", code=400)
+    if "format" in referenceImage and not isinstance(referenceImage["format"], str):
+        raise RestException("Malformed staged reference image format", code=400)
+    validateStagedReferenceImage(referenceImage, user)
+    return name
 
 
 def validateStagedReferenceImage(referenceImage, user):
@@ -141,8 +178,6 @@ def validateStagedReferenceImage(referenceImage, user):
 # out the originals, which have no job to clean them up.
 # ---------------------------------------------------------------------------
 
-_TRANSIENT_META_KEY = TRANSIENT_STAGED_META_KEY
-
 # Age after which an uploaded-but-never-submitted transient item is swept on the
 # next staging call. Upload->submit is normally seconds; a day absorbs an
 # interrupted session without cluttering folders across days.
@@ -151,7 +186,7 @@ _TRANSIENT_ORPHAN_TTL = datetime.timedelta(hours=24)
 
 def _isTransientItem(item):
     """Whether an item carries the staging marker."""
-    return bool((item or {}).get("meta", {}).get(_TRANSIENT_META_KEY))
+    return bool((item or {}).get("meta", {}).get(TRANSIENT_STAGED_META_KEY))
 
 
 def copyStagedInputsIntoJobFolder(params, resolvedInputFiles, user, outputFolder):
@@ -164,62 +199,53 @@ def copyStagedInputsIntoJobFolder(params, resolvedInputFiles, user, outputFolder
     original stays covered by the TTL orphan sweep. Transience is decided by
     the parent item's marker, never by ``type``.
 
-    The copy re-loads each parent under the same READ permission that URI
-    resolution applied. A parent that vanished in between (an orphan sweep or
-    delete) raises 409 rather than publishing a job against deleted file ids.
-    ``Item().copyItem`` deep-copies metadata, so a copy carries the transient
-    marker and is cleaned up exactly like any staged item.
+    URI resolution (``resolveInputUrisToFiles``) already enforced READ on every
+    parent item moments ago, so the transient markers are read with ONE batched
+    find over the distinct parents rather than a per-item ACL'd load. A parent
+    that vanished in between (an orphan sweep or delete) raises 409 rather than
+    publishing a job against deleted file ids. ``Item().copyItem`` deep-copies
+    metadata, so a copy carries the transient marker and is cleaned up exactly
+    like any staged item.
 
     Returns ``(params, copiedItemIds)`` — the (possibly rewritten) params and
     the copied item ids to record on the job for terminal cleanup.
     """
+    itemIds = {
+        fileDoc["itemId"]
+        for fileDocs in resolvedInputFiles.values()
+        for fileDoc in fileDocs
+        if (fileDoc or {}).get("itemId")
+    }
+    items = list(Item().find({"_id": {"$in": list(itemIds)}})) if itemIds else []
+    if len(items) != len(itemIds):
+        # URI resolution ACL-loaded these parents moments ago, so a missing item
+        # means a concurrent delete won the race. Fail the submit rather than
+        # publish a job whose params reference deleted files.
+        raise RestException(
+            "A processing input was removed while the submission "
+            "was in progress; please resubmit",
+            code=409,
+        )
     fileIdRemap = {}
     copiedItemIds = []
-    mappingByItemId = {}
-    for fileDocs in resolvedInputFiles.values():
-        for fileDoc in fileDocs:
-            itemId = (fileDoc or {}).get("itemId")
-            if not itemId:
-                continue
-            key = str(itemId)
-            if key not in mappingByItemId:
-                item = Item().load(itemId, user=user, level=AccessType.READ, exc=False)
-                if item is None:
-                    # URI resolution ACL-loaded this parent moments ago, so a
-                    # missing item means a concurrent delete won the race. Fail
-                    # the submit rather than publish a job whose params
-                    # reference deleted files.
-                    raise RestException(
-                        "A processing input was removed while the submission "
-                        "was in progress; please resubmit",
-                        code=409,
-                    )
-                if not _isTransientItem(item):
-                    mappingByItemId[key] = None
-                else:
-                    copied = Item().copyItem(item, creator=user, folder=outputFolder)
-                    copiedItemIds.append(str(copied["_id"]))
-                    # Copied files preserve their names; sorting both sides by
-                    # name pairs each original file with its copy regardless of
-                    # the underlying cursor order.
-                    originals = sorted(
-                        Item().childFiles(item), key=lambda f: f.get("name", "")
-                    )
-                    copies = sorted(
-                        Item().childFiles(copied), key=lambda f: f.get("name", "")
-                    )
-                    # strict: copyItem duplicates every child file, so a length
-                    # mismatch means a broken copy — fail the submit loudly
-                    # rather than run the job against a partial input.
-                    mappingByItemId[key] = {
-                        str(orig["_id"]): str(cop["_id"])
-                        for orig, cop in zip(originals, copies, strict=True)
-                    }
-            mapping = mappingByItemId[key]
-            if mapping:
-                fileId = str(fileDoc["_id"])
-                if fileId in mapping:
-                    fileIdRemap[fileId] = mapping[fileId]
+    for item in items:
+        if not _isTransientItem(item):
+            continue
+        copied = Item().copyItem(item, creator=user, folder=outputFolder)
+        copiedItemIds.append(str(copied["_id"]))
+        # Copied files preserve their names; sorting both sides by name pairs
+        # each original file with its copy regardless of the underlying cursor
+        # order. strict: copyItem duplicates every child file, so a length
+        # mismatch means a broken copy — fail the submit loudly rather than run
+        # the job against a partial input.
+        originals = sorted(Item().childFiles(item), key=lambda f: f.get("name", ""))
+        copies = sorted(Item().childFiles(copied), key=lambda f: f.get("name", ""))
+        fileIdRemap.update(
+            {
+                str(orig["_id"]): str(cop["_id"])
+                for orig, cop in zip(originals, copies, strict=True)
+            }
+        )
     if not fileIdRemap:
         return params, copiedItemIds
     params = dict(params)
@@ -285,7 +311,7 @@ def _cleanupTransientOnJobDone(event):
     job = JobModel().load(eventJob.get("_id"), force=True, includeLog=False)
     if not isinstance(job, dict):
         return
-    transientItemIds = job.get(_TRANSIENT_META_KEY)
+    transientItemIds = job.get(TRANSIENT_STAGED_META_KEY)
     if not isinstance(transientItemIds, list) or not transientItemIds:
         return
     if not isTerminalStatus(job.get("status")):
@@ -309,7 +335,7 @@ def _sweepOrphanTransients(folder, now=None):
     cutoff = now - _TRANSIENT_ORPHAN_TTL
     query = {
         "folderId": folder["_id"],
-        "meta.%s" % _TRANSIENT_META_KEY: True,
+        "meta.%s" % TRANSIENT_STAGED_META_KEY: True,
         "created": {"$lt": cutoff},
     }
     try:
@@ -352,12 +378,12 @@ def _streamMultipartFileIntoItem(folder, user, part, name):
     )
 
 
-def _tagItemTransient(fileDoc, user):
+def _tagItemTransient(fileDoc):
     """Tag a freshly-uploaded file's parent item transient; return the item."""
     itemId = fileDoc.get("itemId")
     if not itemId:
         return None
     item = Item().load(itemId, force=True)
     if item:
-        Item().setMetadata(item, {_TRANSIENT_META_KEY: True})
+        Item().setMetadata(item, {TRANSIENT_STAGED_META_KEY: True})
     return item

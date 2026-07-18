@@ -35,31 +35,8 @@ RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
 # ---------------------------------------------------------------------------
-# Real users / folders
+# Real users / folders (shared owner/ownerFolder fixtures live in conftest)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="stageowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="stageowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def ownerFolder(fsAssetstore, owner):
-    from girder.models.folder import Folder
-
-    return Folder().createFolder(
-        owner, "launch", parentType="user", creator=owner, public=False
-    )
 
 
 @pytest.fixture
@@ -265,7 +242,7 @@ def test_stage_tag_failure_leaves_no_untagged_item(
     # and surface as ordinary launch data.
     from girder.models.folder import Folder
 
-    def boom(fileDoc, user):
+    def boom(fileDoc):
         raise Exception("injected tagging failure")
 
     monkeypatch.setattr(inputs, "_tagItemTransient", boom)

@@ -9,6 +9,7 @@ These drive the pure control flow with fake Girder/Job models -- no live Girder
 """
 
 import datetime
+from conftest import _Event
 
 import pytest
 from bson.objectid import ObjectId
@@ -18,16 +19,12 @@ from girder.exceptions import RestException
 from girder_jobs.constants import JobStatus
 
 from girder_volview.backend import inputs
+from girder_volview.utils import TRANSIENT_STAGED_META_KEY
 
 
 # ---------------------------------------------------------------------------
 # Fakes (no live Girder)
 # ---------------------------------------------------------------------------
-
-
-class _Event:
-    def __init__(self, info):
-        self.info = info
 
 
 class _RecordingItemModel:
@@ -246,7 +243,7 @@ def test_staged_inputs_are_copied_and_params_rewritten(monkeypatch):
             itemsById={
                 str(stagedItemId): {
                     "_id": stagedItemId,
-                    "meta": {inputs._TRANSIENT_META_KEY: True},
+                    "meta": {TRANSIENT_STAGED_META_KEY: True},
                 },
                 str(durableItemId): {"_id": durableItemId, "meta": {}},
             },
@@ -315,7 +312,7 @@ def test_shared_staged_input_copied_once_per_job_submission(monkeypatch):
             itemsById={
                 str(stagedItemId): {
                     "_id": stagedItemId,
-                    "meta": {inputs._TRANSIENT_META_KEY: True},
+                    "meta": {TRANSIENT_STAGED_META_KEY: True},
                 }
             },
             filesByItemId={stagedItemId: [stagedFile]},

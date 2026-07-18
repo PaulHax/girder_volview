@@ -12,7 +12,7 @@ Needs a live pytest-girder server + Mongo; self-skips when the test Mongo is
 unreachable so the offline gate stays green.
 """
 
-from conftest import mongo_reachable
+from conftest import _reload, mongo_reachable
 
 import pytest
 
@@ -30,36 +30,8 @@ CANCEL_PATH = "/volview_processing/jobs/%s/cancel"
 
 
 # ---------------------------------------------------------------------------
-# Users
+# Users -- shared owner/stranger fixtures live in conftest
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="jobowner",
-        password="password123",
-        firstName="Job",
-        lastName="Owner",
-        email="jobowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def stranger(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="stranger",
-        password="password123",
-        firstName="No",
-        lastName="Access",
-        email="stranger@example.com",
-        admin=False,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +55,6 @@ def _makeJob(user, public=False, status=None):
         for s in path:
             job = Job().updateJob(job, status=s)
     return job
-
-
-def _reload(jobId):
-    from girder_jobs.models.job import Job
-
-    return Job().load(jobId, force=True)
 
 
 def _get(server, path, user):

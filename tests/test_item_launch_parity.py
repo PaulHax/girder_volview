@@ -57,32 +57,7 @@ RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="parityowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="parityowner@example.com",
-        admin=False,
-    )
-
-
-@pytest.fixture
-def stranger(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="paritystranger",
-        password="password123",
-        firstName="N",
-        lastName="A",
-        email="paritystranger@example.com",
-        admin=False,
-    )
+# The shared ``owner``/``stranger`` fixtures live in conftest.
 
 
 @pytest.fixture

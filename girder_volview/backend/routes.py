@@ -12,6 +12,7 @@ import binascii
 import copy
 import datetime
 import json
+import threading
 import uuid
 
 import cherrypy
@@ -23,7 +24,12 @@ from girder.constants import AccessType, TokenScope
 from girder.exceptions import RestException, ValidationException
 from girder.models.folder import Folder
 
-from ..utils import makeFileDownloadUrl, JOB_OUTPUT_FOLDER_META_KEY
+from ..utils import (
+    makeFileDownloadUrl,
+    JOB_OUTPUT_FOLDER_META_KEY,
+    TRANSIENT_STAGED_META_KEY,
+)
+from .config import PROCESSING_ROUTE_NAME
 from .slicer_spec import translate_slicer_xml, declared_params
 from . import inputs, submit, outputs, results
 
@@ -414,7 +420,7 @@ def _prepareSubmissionFields(
         _SUBMITTED_PARAMETERS_FIELD: copy.deepcopy(values),
     }
     if transientItemIds:
-        fields[inputs._TRANSIENT_META_KEY] = list(transientItemIds)
+        fields[TRANSIENT_STAGED_META_KEY] = list(transientItemIds)
     return fields
 
 
@@ -730,29 +736,16 @@ def cancelJob(self, jobId):
 )
 def stageInput(self, folder, file, descriptor):
     user = self.getCurrentUser()
-    if set(descriptor) != {"type", "name", "referenceImage"}:
-        raise RestException("Malformed staged resource descriptor", code=400)
-    if descriptor.get("type") != "labelmap":
-        raise RestException("Staged resource type must be labelmap", code=400)
-    name = descriptor.get("name")
-    if not isinstance(name, str) or not name:
-        raise RestException("Staged resource name must not be empty", code=400)
-    referenceImage = descriptor.get("referenceImage")
-    if not isinstance(referenceImage, dict):
-        raise RestException("Staged labelmap requires a reference image", code=400)
-    if not set(referenceImage).issubset({"type", "format", "uris"}):
-        raise RestException("Malformed staged reference image", code=400)
-    if "format" in referenceImage and not isinstance(referenceImage["format"], str):
-        raise RestException("Malformed staged reference image format", code=400)
-    # Validate the reference image before writing bytes so a malformed, foreign,
-    # unauthorized, or transient reference never leaves an orphan upload.
-    inputs.validateStagedReferenceImage(referenceImage, user)
+    # Validate the whole descriptor (reference image included) before writing
+    # bytes so a malformed, foreign, unauthorized, or transient reference never
+    # leaves an orphan upload.
+    name = inputs.validateStagedDescriptor(descriptor, user)
     # Job-end cleanup never sees an upload that was never submitted, so age out
     # this folder's orphans before adding another.
     inputs._sweepOrphanTransients(folder)
     fileDoc = inputs._streamMultipartFileIntoItem(folder, user, file, name)
     try:
-        inputs._tagItemTransient(fileDoc, user)
+        inputs._tagItemTransient(fileDoc)
     except Exception:
         # An untagged item is invisible to both the TTL sweep and the
         # launch-manifest exclusion (each keys on the transient marker), so it
@@ -781,7 +774,7 @@ class _JobResource(Resource):
 
     def __init__(self):
         super().__init__()
-        self.resourceName = "volview_processing"
+        self.resourceName = PROCESSING_ROUTE_NAME
         self.route("GET", ("jobs", ":jobId"), getJob)
         self.route("GET", ("jobs", ":jobId", "detail"), getJobHistoryDetail)
         self.route("DELETE", ("jobs", ":jobId"), deleteJob)
@@ -789,8 +782,27 @@ class _JobResource(Resource):
         self.route("POST", ("jobs", ":jobId", "cancel"), cancelJob)
 
 
+def _ensureJobHistoryIndexesInBackground():
+    """Kick the index builds off a daemon thread so plugin load never blocks.
+
+    ``create_index`` is idempotent and a no-op on steady state, but the FIRST
+    boot against a large pre-existing jobs collection waits for the whole build;
+    the queries the indexes back merely degrade to scans until the build lands.
+    """
+
+    def build():
+        try:
+            ensureJobHistoryIndexes()
+        except Exception:
+            logger.exception("Failed to ensure volview job-history indexes")
+
+    threading.Thread(
+        target=build, name="volview-job-history-indexes", daemon=True
+    ).start()
+
+
 def addBackendRoutes(info):
-    ensureJobHistoryIndexes()
+    _ensureJobHistoryIndexesInBackground()
     # Delete a job's transient staged inputs once it reaches a terminal state.
     # Fires for every job update but no-ops cheaply unless the job carries the
     # transient marker.
@@ -862,24 +874,24 @@ def addBackendRoutes(info):
 
     JobModel().exposeFields(level=AccessType.READ, fields={outputs._OUTPUTS_FIELD})
     info["apiRoot"].folder.route(
-        "GET", (":folderId", "volview_processing", "tasks"), listTasks
+        "GET", (":folderId", PROCESSING_ROUTE_NAME, "tasks"), listTasks
     )
     # Job re-discovery is context-scoped (it takes a launch folder), not
     # job-addressed: a reloaded client GETs this to re-find its jobs.
     info["apiRoot"].folder.route(
-        "GET", (":folderId", "volview_processing", "jobs"), listJobHistory
+        "GET", (":folderId", PROCESSING_ROUTE_NAME, "jobs"), listJobHistory
     )
     info["apiRoot"].folder.route(
-        "POST", (":folderId", "volview_processing", "stage"), stageInput
+        "POST", (":folderId", PROCESSING_ROUTE_NAME, "stage"), stageInput
     )
     info["apiRoot"].folder.route(
         "GET",
-        (":folderId", "volview_processing", "tasks", ":taskId", "spec"),
+        (":folderId", PROCESSING_ROUTE_NAME, "tasks", ":taskId", "spec"),
         getTaskSpec,
     )
     info["apiRoot"].folder.route(
         "POST",
-        (":folderId", "volview_processing", "tasks", ":taskId", "run"),
+        (":folderId", PROCESSING_ROUTE_NAME, "tasks", ":taskId", "run"),
         runTask,
     )
     info["apiRoot"].volview_processing = _JobResource()

@@ -14,12 +14,10 @@ from bson.objectid import ObjectId
 
 from girder.exceptions import AccessException, RestException
 
+from conftest import API_ROOT
 import contract_loader
 from girder_volview import handles, utils
 from girder_volview.backend import config, inputs, outputs, results, routes, submit
-
-
-API_ROOT = "api/v1"
 
 
 def _mint(fileId, name="slice.dcm", apiRoot=API_ROOT):
@@ -67,13 +65,12 @@ class _DenyItem:
 
 
 @pytest.fixture(autouse=True)
-def _fixed_api_root(monkeypatch):
+def _fixed_api_root(_fixed_api_root, monkeypatch):
     # Deterministic mount so the fixtures' ``/api/v1/...`` uris parse regardless
     # of ambient server config; one test flexes a non-default root explicitly.
-    # ``handles`` is the mint/parse pair's defining module; ``config`` is patched
-    # too because the provider config's ``baseUrl``/``jobsBaseUrl`` derive from
-    # ``config.getApiRoot()``.
-    monkeypatch.setattr(handles, "getApiRoot", lambda: API_ROOT)
+    # The shared conftest pin covers ``handles`` (the mint/parse pair's defining
+    # module); ``config`` is patched too because the provider config's
+    # ``baseUrl``/``jobsBaseUrl`` derive from ``config.getApiRoot()``.
     monkeypatch.setattr(config, "getApiRoot", lambda: API_ROOT)
 
 

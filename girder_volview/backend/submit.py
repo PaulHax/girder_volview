@@ -16,6 +16,13 @@ from .slicer_spec import (
     _RESERVED_INPUT_PARAMS,
 )
 
+# slicer_cli_web's output-destination convention: for each output param the
+# submission carries a derived ``{param}_folder`` param naming the destination
+# folder. One symbol ties the server-side emit
+# (``_translateValuesToSlicerParams``) to the submit-time reject of any
+# client-supplied ``*_folder`` key (``_rejectReservedSubmitParams``).
+_OUTPUT_FOLDER_SUFFIX = "_folder"
+
 
 # ---------------------------------------------------------------------------
 # slicer_cli_web bridge
@@ -315,7 +322,7 @@ def _rejectReservedSubmitParams(values):
     offending = sorted(
         key
         for key in (values or {})
-        if key in _RESERVED_INPUT_PARAMS or key.endswith("_folder")
+        if key in _RESERVED_INPUT_PARAMS or key.endswith(_OUTPUT_FOLDER_SUFFIX)
     )
     if offending:
         raise RestException(
@@ -573,7 +580,7 @@ def _translateValuesToSlicerParams(values, user, outputFolder, declared=None):
                     code=400,
                 )
             params[paramName] = value["name"]
-            params[f"{paramName}_folder"] = str(outputFolder["_id"])
+            params[paramName + _OUTPUT_FOLDER_SUFFIX] = str(outputFolder["_id"])
         elif isinstance(value, str):
             params[paramName] = value
         elif isinstance(value, list):

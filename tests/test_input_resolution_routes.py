@@ -42,40 +42,9 @@ RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
 # ---------------------------------------------------------------------------
-# Real users / folders / files
+# Real users / folders / files (shared owner/stranger/ownerFolder fixtures
+# live in conftest)
 # ---------------------------------------------------------------------------
-
-
-def _makeUser(login, email):
-    from girder.models.user import User
-
-    return User().createUser(
-        login=login,
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email=email,
-        admin=False,
-    )
-
-
-@pytest.fixture
-def owner(db):
-    return _makeUser("owneruser", "owner@example.com")
-
-
-@pytest.fixture
-def stranger(db):
-    return _makeUser("strangeruser", "stranger@example.com")
-
-
-@pytest.fixture
-def ownerFolder(fsAssetstore, owner):
-    from girder.models.folder import Folder
-
-    return Folder().createFolder(
-        owner, "launch", parentType="user", creator=owner, public=False
-    )
 
 
 @pytest.fixture

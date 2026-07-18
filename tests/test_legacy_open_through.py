@@ -13,29 +13,11 @@ live cherrypy pipeline:
   folder/item/file doc (the read paths are read-only).
 """
 
-import io
-from conftest import mongo_reachable
+from conftest import _folderManifest, _itemManifest, _uploadFile, mongo_reachable
 
 import pytest
 
 from girder_volview.utils import filesToManifest, makeFileDownloadUrl
-
-
-def _uploadFile(folder, user, name, data=b"pixels"):
-    """Upload one file into ``folder``; return (item, file)."""
-    from girder.models.item import Item
-    from girder.models.upload import Upload
-
-    fileDoc = Upload().uploadFromFile(
-        io.BytesIO(data),
-        size=len(data),
-        name=name,
-        parentType="folder",
-        parent=folder,
-        user=user,
-    )
-    item = Item().load(fileDoc["itemId"], force=True)
-    return item, fileDoc
 
 
 pytestmark = pytest.mark.skipif(
@@ -45,22 +27,9 @@ pytestmark = pytest.mark.skipif(
 
 
 # ---------------------------------------------------------------------------
-# Fixtures + helpers
+# Fixtures + helpers (shared owner fixture + upload/manifest helpers live in
+# conftest)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def owner(db):
-    from girder.models.user import User
-
-    return User().createUser(
-        login="legacyowner",
-        password="password123",
-        firstName="A",
-        lastName="B",
-        email="legacyowner@example.com",
-        admin=False,
-    )
 
 
 @pytest.fixture
@@ -70,18 +39,6 @@ def studyFolder(fsAssetstore, owner):
     return Folder().createFolder(
         owner, "study", parentType="user", creator=owner, public=False
     )
-
-
-def _getJson(server, path, user, **kwargs):
-    return server.request(path=path, method="GET", user=user, isJson=True, **kwargs)
-
-
-def _folderManifest(server, folder, user, **kwargs):
-    return _getJson(server, "/folder/%s/volview" % folder["_id"], user, **kwargs)
-
-
-def _itemManifest(server, item, user, **kwargs):
-    return _getJson(server, "/item/%s/volview" % item["_id"], user, **kwargs)
 
 
 def _legacyManifestFor(fileDoc, folder):

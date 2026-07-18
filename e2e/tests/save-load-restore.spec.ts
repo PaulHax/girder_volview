@@ -28,12 +28,9 @@ const isManifestGet = (response: { request: () => { method: () => string }; url:
   response.request().method() === 'GET' &&
   /\/(item|folder)\/[^/]+\/volview$/.test(new URL(response.url()).pathname);
 
-async function gotoCapturingManifest(page: Page, url: string): Promise<any> {
-  const manifestResp = page.waitForResponse(
-    isManifestGet,
-    { timeout: 60_000 }
-  );
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
+async function captureManifest(page: Page, navigate: () => Promise<unknown>): Promise<any> {
+  const manifestResp = page.waitForResponse(isManifestGet, { timeout: 60_000 });
+  await navigate();
   const resp = await manifestResp.catch(() => undefined);
   await waitForVolViewReady(page);
   if (!resp) return undefined;
@@ -44,21 +41,11 @@ async function gotoCapturingManifest(page: Page, url: string): Promise<any> {
   }
 }
 
-async function reloadCapturingManifest(page: Page): Promise<any> {
-  const manifestResp = page.waitForResponse(
-    isManifestGet,
-    { timeout: 60_000 }
-  );
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const resp = await manifestResp.catch(() => undefined);
-  await waitForVolViewReady(page);
-  if (!resp) return undefined;
-  try {
-    return await resp.json();
-  } catch {
-    return undefined;
-  }
-}
+const gotoCapturingManifest = (page: Page, url: string) =>
+  captureManifest(page, () => page.goto(url, { waitUntil: 'domcontentloaded' }));
+
+const reloadCapturingManifest = (page: Page) =>
+  captureManifest(page, () => page.reload({ waitUntil: 'domcontentloaded' }));
 
 test.describe.configure({ mode: 'serial' });
 

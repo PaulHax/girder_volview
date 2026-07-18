@@ -12,6 +12,7 @@ two jobs against two folders) lives in ``test_job_output_binding_routes``.
 """
 
 import json
+from conftest import _Event
 
 import pytest
 from bson.objectid import ObjectId
@@ -29,11 +30,6 @@ _FOLDER = outputs_mod._OUTPUT_FOLDER_ID_FIELD
 # ---------------------------------------------------------------------------
 # Fakes (no live Girder)
 # ---------------------------------------------------------------------------
-
-
-class _Event:
-    def __init__(self, info):
-        self.info = info
 
 
 class _FakeJob:

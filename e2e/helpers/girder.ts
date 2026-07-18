@@ -1,5 +1,6 @@
 import { APIRequestContext, BrowserContext, expect } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
+import { authenticate } from './provision';
 import { readState } from './state';
 
 export { CONFIG };
@@ -18,15 +19,7 @@ export function resolveContext(): { folderId: string } {
 // same token is planted as the `girderToken` cookie so VolView's cookie-auth
 // manifest/save routes accept the launched tab.
 export async function login(request: APIRequestContext): Promise<string> {
-  const basic = Buffer.from(`${CONFIG.user}:${CONFIG.pass}`).toString('base64');
-  const res = await request.get(api('/user/authentication'), {
-    headers: { Authorization: `Basic ${basic}` },
-  });
-  expect(res.ok(), `girder auth failed (${res.status()}) for ${CONFIG.user}@${CONFIG.baseURL}`).toBeTruthy();
-  const body = await res.json();
-  const token = body?.authToken?.token;
-  expect(token, 'no authToken.token in girder auth response').toBeTruthy();
-  return token as string;
+  return (await authenticate(request)).token;
 }
 
 export async function plantCookie(context: BrowserContext, token: string) {
@@ -47,21 +40,26 @@ export async function resolveImageItem(
   const res = await request.get(api(`/item?folderId=${folderId}&limit=100`), {
     headers: { 'Girder-Token': token },
   });
-  const items: Array<{ _id: string; name: string; meta?: Record<string, unknown> }> = await res.json();
+  const items: Array<{ _id: string; name: string }> = await res.json();
+  // Job outputs never appear here: they live in `volview-jobs` subfolders,
+  // outside this direct-children listing.
   const image = items.find(
-    (it) =>
-      !it.name.endsWith('.volview.zip') &&
-      !it.name.endsWith('.volview.json') &&
-      !it.meta?.volviewJobOutput
+    (it) => !it.name.endsWith('.volview.zip') && !it.name.endsWith('.volview.json')
   );
   expect(image, `no loadable raw-image item found in folder ${folderId}`).toBeTruthy();
   return { itemId: image!._id, itemName: image!.name };
 }
 
 export async function setup(request: APIRequestContext, context: BrowserContext): Promise<Girder> {
-  const token = await login(request);
+  // Reuse what global setup persisted (token, provisioned items) and fall back
+  // to live calls only when the state file lacks it.
+  const state = readState();
+  const token = state?.token || (await login(request));
   await plantCookie(context, token);
-  const { folderId } = resolveContext();
+  const folderId = state?.folderId || '';
+  if (state?.itemIds?.[0] && state?.itemNames?.[0]) {
+    return { token, folderId, itemId: state.itemIds[0], itemName: state.itemNames[0] };
+  }
   const { itemId, itemName } = await resolveImageItem(request, token, folderId);
   return { token, folderId, itemId, itemName };
 }

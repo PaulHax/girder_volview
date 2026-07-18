@@ -20,7 +20,6 @@ the route handlers emit them (``TaskSummary`` is driven through the real
 server-fixture suites (``test_job_output_binding_routes`` etc.).
 """
 
-import json
 import types
 
 import jsonschema
@@ -28,13 +27,6 @@ import pytest
 
 import contract_loader
 from girder_volview.backend import submit
-
-
-_OPENAPI = contract_loader.GENERATED_ROOT / "openapi.json"
-
-
-def _load_openapi():
-    return json.loads(_OPENAPI.read_text())
 
 
 def _envelope_validator(component_name):
@@ -46,7 +38,7 @@ def _envelope_validator(component_name):
     document. Loads straight from the contract rather than hand-copying schema
     JSON, which would fork the single source.
     """
-    doc = _load_openapi()
+    doc = contract_loader.load_openapi()
     schema = dict(doc)
     schema["$ref"] = "#/components/schemas/%s" % component_name
     return jsonschema.Draft202012Validator(schema)
@@ -267,7 +259,7 @@ def test_every_openapi_component_has_a_validating_consumer():
     # Fail-closed drift guard (no documentation-only schemas): a newly published
     # component with no validating consumer here or in a per-schema suite trips
     # this assertion.
-    published = set(_load_openapi()["components"]["schemas"])
+    published = set(contract_loader.load_openapi()["components"]["schemas"])
     covered = _ENVELOPES_VALIDATED_HERE | set(_WIRE_COMPONENTS_VALIDATED_ELSEWHERE)
     assert published == covered, {
         "unconsumed": sorted(published - covered),
