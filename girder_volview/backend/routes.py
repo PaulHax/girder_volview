@@ -243,20 +243,27 @@ def _jobsContainerFolder(launchFolder, user):
     merely shares the reserved name would silently hide its contents from
     launch manifests and turn the container-delete gesture into "delete
     unrelated user data", so an unmarked collision refuses the submission with
-    a clear 409 instead. The marker also drives manifest exclusion (defense in
-    depth -- the container holds no files directly and owns no job, so the
-    reverse-cascade handler no-ops on it). Its ACL is the launch folder's
-    (copied by ``createFolder``): collaborators may see the container, but each
-    per-job folder inside keeps its submitter-only ACL.
+    a clear 409 instead. The marker is stamped ONLY on a folder this call
+    itself created: ``createFolder`` never reuses (name-collision raises
+    ``ValidationException``), so a folder someone else made in the
+    check-create window re-runs the marker check instead of being adopted.
+    The marker also drives manifest exclusion (defense in depth -- the
+    container holds no files directly and owns no job, so the reverse-cascade
+    handler no-ops on it). Its ACL is the launch folder's (copied by
+    ``createFolder``): collaborators may see the container, but each per-job
+    folder inside keeps its submitter-only ACL.
     """
-    existing = Folder().findOne(
-        {
-            "parentId": launchFolder["_id"],
-            "parentCollection": "folder",
-            "name": JOBS_CONTAINER_NAME,
-        }
-    )
-    if existing is not None:
+
+    def existingContainer():
+        existing = Folder().findOne(
+            {
+                "parentId": launchFolder["_id"],
+                "parentCollection": "folder",
+                "name": JOBS_CONTAINER_NAME,
+            }
+        )
+        if existing is None:
+            return None
         if (existing.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY):
             return existing
         raise RestException(
@@ -265,21 +272,27 @@ def _jobsContainerFolder(launchFolder, user):
             % JOBS_CONTAINER_NAME,
             code=409,
         )
-    # reuseExisting keeps concurrent first submissions race-tolerant: both
-    # resolve to the one container, and both stamp the same marker.
-    container = Folder().createFolder(
-        parent=launchFolder,
-        name=JOBS_CONTAINER_NAME,
-        parentType="folder",
-        creator=user,
-        public=False,
-        reuseExisting=True,
-    )
-    if not container.get("meta", {}).get(JOB_OUTPUT_FOLDER_META_KEY):
-        container = Folder().setMetadata(
-            container, {JOB_OUTPUT_FOLDER_META_KEY: True}
+
+    container = existingContainer()
+    if container is not None:
+        return container
+    try:
+        created = Folder().createFolder(
+            parent=launchFolder,
+            name=JOBS_CONTAINER_NAME,
+            parentType="folder",
+            creator=user,
+            public=False,
         )
-    return container
+    except ValidationException:
+        # Lost a creation race: a same-named sibling appeared between the check
+        # and the create. Re-run the marker check -- a concurrent submission's
+        # container is reused; a user's folder 409s (never adopted).
+        container = existingContainer()
+        if container is None:
+            raise
+        return container
+    return Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
 
 
 def _createJobOutputFolder(launchFolder, user, submissionId):
@@ -859,6 +872,26 @@ def addBackendRoutes(info):
         "rest.delete.folder/:id.before",
         "girder_volview.backend.outputs",
         outputs._refuseLiveJobFolderRestDelete,
+    )
+    # The same preflight for every OTHER recursive deletion entry point:
+    # collection delete, user delete, and the batch /resource route all reach
+    # Folder.remove without passing DELETE /folder/:id, so each would otherwise
+    # destroy a live job's staged inputs and partial outputs before the late
+    # model-level guard could refuse.
+    events.bind(
+        "rest.delete.collection/:id.before",
+        "girder_volview.backend.outputs",
+        outputs._refuseLiveJobCollectionRestDelete,
+    )
+    events.bind(
+        "rest.delete.user/:id.before",
+        "girder_volview.backend.outputs",
+        outputs._refuseLiveJobUserRestDelete,
+    )
+    events.bind(
+        "rest.delete.resource.before",
+        "girder_volview.backend.outputs",
+        outputs._refuseLiveJobResourceRestDelete,
     )
     # The recorded id map is READ-exposed; the job's own ACL is the gate
     # (otherFields + exposeFields, mirroring slicer_cli_web's slicerCLIBindings).

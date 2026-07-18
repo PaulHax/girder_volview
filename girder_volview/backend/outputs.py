@@ -271,30 +271,37 @@ def _cascadeDeleteFolderOwnedJob(event):
         raise
 
 
-def _folderSubtreeContains(ancestorId, folderId):
-    """Whether ``folderId`` IS ``ancestorId`` or lies anywhere under it.
+def _folderChainMatchesTargets(folderId, folderTargets, baseTargets):
+    """Whether ``folderId`` is/descends from any folder in ``folderTargets``,
+    or its ROOT folder hangs directly under any ``(parentType, id)`` pair in
+    ``baseTargets`` (a collection or user about to be recursively deleted).
 
     Walks the folder's parent chain upward (owned output folders nest a couple
-    of levels deep, so the chain is short). Fail closed on a missing folder or
-    a non-folder parent; a (corrupt) parent cycle terminates via ``seen``.
+    of levels deep, so the chain is short). Fail closed on a missing folder;
+    a (corrupt) parent cycle terminates via ``seen``.
     """
-    ancestor = str(ancestorId)
     seen = set()
     currentId = folderId
     while currentId is not None and str(currentId) not in seen:
-        if str(currentId) == ancestor:
+        if str(currentId) in folderTargets:
             return True
         seen.add(str(currentId))
         folder = Folder().load(currentId, force=True, exc=False)
-        if not isinstance(folder, dict) or folder.get("parentCollection") != "folder":
+        if not isinstance(folder, dict):
             return False
+        if folder.get("parentCollection") != "folder":
+            return (
+                folder.get("parentCollection"),
+                str(folder.get("parentId")),
+            ) in baseTargets
         currentId = folder.get("parentId")
     return False
 
 
-def _liveJobOwningFolderInSubtree(folderId):
-    """The first non-terminal job whose owned output folder is ``folderId`` or
-    any descendant of it, else ``None``.
+def _liveJobOwningFolderUnderTargets(folderIds=(), baseParents=()):
+    """The first non-terminal job whose owned output folder is one of
+    ``folderIds``, a descendant of one, or contained (transitively) in any
+    ``(parentType, id)`` collection/user in ``baseParents`` — else ``None``.
 
     Persisted job ownership is the AUTHORITATIVE record: neither the deleted
     folder nor anything on the path needs to carry the folder marker, so
@@ -307,6 +314,10 @@ def _liveJobOwningFolderInSubtree(folderId):
 
     from .results import terminalStatuses
 
+    folderTargets = {str(folderId) for folderId in folderIds}
+    baseTargets = {(parentType, str(_id)) for parentType, _id in baseParents}
+    if not folderTargets and not baseTargets:
+        return None
     jobs = JobModel().find(
         {
             _OUTPUT_FOLDER_ID_FIELD: {"$exists": True},
@@ -314,9 +325,20 @@ def _liveJobOwningFolderInSubtree(folderId):
         }
     )
     for job in jobs:
-        if _folderSubtreeContains(folderId, job.get(_OUTPUT_FOLDER_ID_FIELD)):
+        if _folderChainMatchesTargets(
+            job.get(_OUTPUT_FOLDER_ID_FIELD), folderTargets, baseTargets
+        ):
             return job
     return None
+
+
+def _refuseIfLiveJobUnder(folderIds=(), baseParents=()):
+    if _liveJobOwningFolderUnderTargets(folderIds, baseParents) is not None:
+        raise RestException(
+            "Cannot delete a processing job's output folder while the job is "
+            "still running; cancel the job first",
+            code=409,
+        )
 
 
 def _refuseLiveJobFolderRestDelete(event):
@@ -332,11 +354,54 @@ def _refuseLiveJobFolderRestDelete(event):
     """
     info = getattr(event, "info", None)
     folderId = (info or {}).get("id")
-    if not folderId:
+    if folderId:
+        _refuseIfLiveJobUnder(folderIds=[folderId])
+
+
+def _refuseLiveJobCollectionRestDelete(event):
+    """``rest.delete.collection/:id.before``: the same preflight for collection
+    deletion, which recursively removes every folder inside without ever
+    passing through ``DELETE /folder/:id``."""
+    info = getattr(event, "info", None)
+    collectionId = (info or {}).get("id")
+    if collectionId:
+        _refuseIfLiveJobUnder(baseParents=[("collection", collectionId)])
+
+
+def _refuseLiveJobUserRestDelete(event):
+    """``rest.delete.user/:id.before``: the same preflight for user deletion
+    (removes the user's whole folder tree)."""
+    info = getattr(event, "info", None)
+    userId = (info or {}).get("id")
+    if userId:
+        _refuseIfLiveJobUnder(baseParents=[("user", userId)])
+
+
+def _refuseLiveJobResourceRestDelete(event):
+    """``rest.delete.resource.before``: the same preflight for the batch
+    ``DELETE /resource`` route (arbitrary folder/collection/user ids).
+
+    A malformed ``resources`` payload is left for the route itself to 400;
+    item ids are ignored (an item cannot contain a job's output folder).
+    """
+    info = getattr(event, "info", None)
+    raw = ((info or {}).get("params") or {}).get("resources")
+    try:
+        resources = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
         return
-    if _liveJobOwningFolderInSubtree(folderId) is not None:
-        raise RestException(
-            "Cannot delete a processing job's output folder while the job is "
-            "still running; cancel the job first",
-            code=409,
-        )
+    if not isinstance(resources, dict):
+        return
+    ids = {
+        model: [_id for _id in values if _id]
+        for model, values in resources.items()
+        if isinstance(values, list)
+    }
+    _refuseIfLiveJobUnder(
+        folderIds=ids.get("folder", ()),
+        baseParents=[
+            (parentType, _id)
+            for parentType in ("collection", "user")
+            for _id in ids.get(parentType, ())
+        ],
+    )

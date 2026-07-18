@@ -78,7 +78,16 @@ def test_negative_fixtures_present():
         "unknown-field-kind",
         "constraint-violation",
         "wrong-length-color",
+        "empty-uris",
     }
+
+
+def test_input_value_schema_rejects_empty_uris():
+    # Mirrors the backend's own 400 (inputs.resolveInputUrisToFiles): a bound
+    # input with no uris is not a value, and the normative schema agrees.
+    schema = contract_loader.load_generated_schema("input-value")
+    empty = contract_loader.load_fixture("negative/empty-uris.json")
+    assert not jsonschema.Draft202012Validator(schema).is_valid(empty)
 
 
 def test_strict_intent_branch_rejects_wrong_length_color():

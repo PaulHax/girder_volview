@@ -18,6 +18,7 @@ module self-skips when the test Mongo is unreachable.
 """
 
 import io
+import json
 from conftest import mongo_reachable
 import uuid
 
@@ -460,3 +461,181 @@ def test_marked_container_is_reused(server, owner, launchFolder):
     assert str(a["parentId"]) == str(b["parentId"])
     container = _container(launchFolder)
     assert container["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True
+
+
+@pytest.mark.plugin("volview")
+def test_container_create_race_does_not_adopt(server, owner, launchFolder, monkeypatch):
+    """A user folder that appears BETWEEN the pre-check and the create must not
+    be adopted (marker-stamped): the lost creation race re-runs the marker
+    check and 409s. Simulated by blinding the first pre-check ``findOne``."""
+    from girder.exceptions import RestException
+    from girder.models.folder import Folder
+    from girder.models.item import Item
+
+    userFolder = Folder().createFolder(
+        launchFolder,
+        routes.JOBS_CONTAINER_NAME,
+        parentType="folder",
+        creator=owner,
+        public=False,
+    )
+    keepsake = Item().createItem("precious.nrrd", owner, userFolder)
+
+    realFindOne = Folder.findOne
+    blinded = {"done": False}
+
+    def blindFirstContainerLookup(self, query=None, **kwargs):
+        if (
+            not blinded["done"]
+            and isinstance(query, dict)
+            and query.get("name") == routes.JOBS_CONTAINER_NAME
+        ):
+            blinded["done"] = True
+            return None
+        return realFindOne(self, query, **kwargs)
+
+    monkeypatch.setattr(Folder, "findOne", blindFirstContainerLookup)
+    with pytest.raises(RestException) as excinfo:
+        routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
+    assert excinfo.value.code == 409
+    assert blinded["done"]
+
+    # The user's folder is untouched: no adoption marker, contents intact.
+    reloaded = Folder().load(userFolder["_id"], force=True)
+    assert not (reloaded.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
+    assert _itemExists(keepsake["_id"])
+
+
+# ---------------------------------------------------------------------------
+# 10. Every recursive deletion entry point gets the live-job preflight:
+#     collection delete, user delete, and the batch /resource route
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def admin(db):
+    from girder.models.user import User
+
+    return User().createUser(
+        login="cascadeadmin",
+        password="password123",
+        firstName="A",
+        lastName="D",
+        email="cascadeadmin@example.com",
+        admin=True,
+    )
+
+
+def _collectionLaunchFolder(owner, name="cascade-collection"):
+    from girder.models.collection import Collection
+    from girder.models.folder import Folder
+
+    collection = Collection().createCollection(name, creator=owner, public=False)
+    folder = Folder().createFolder(
+        collection, "launch", parentType="collection", creator=owner, public=False
+    )
+    return collection, folder
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_blocks_collection_rest_delete(server, owner):
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    collection, launchFolder = _collectionLaunchFolder(owner)
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+
+    def _deleteCollection():
+        return server.request(
+            path="/collection/%s" % collection["_id"],
+            method="DELETE",
+            user=owner,
+            isJson=False,
+            exception=True,
+        )
+
+    resp = _deleteCollection()
+    assert resp.output_status.startswith(b"409")
+    assert _folderExists(outputFolder["_id"])
+    assert _jobExists(job["_id"])
+
+    Job().updateJob(_reload(job), status=JobStatus.SUCCESS)
+    resp = _deleteCollection()
+    assert resp.output_status.startswith(b"200")
+    assert not _folderExists(outputFolder["_id"])
+    assert not _jobExists(job["_id"])
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_blocks_user_rest_delete(server, owner, launchFolder, admin):
+    from girder.models.user import User
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+
+    def _deleteUser():
+        return server.request(
+            path="/user/%s" % owner["_id"],
+            method="DELETE",
+            user=admin,
+            isJson=False,
+            exception=True,
+        )
+
+    resp = _deleteUser()
+    assert resp.output_status.startswith(b"409")
+    assert _folderExists(outputFolder["_id"])
+    assert _jobExists(job["_id"])
+
+    Job().updateJob(_reload(job), status=JobStatus.SUCCESS)
+    resp = _deleteUser()
+    assert resp.output_status.startswith(b"200")
+    assert User().load(owner["_id"], force=True, exc=False) is None
+    assert not _folderExists(outputFolder["_id"])
+
+
+@pytest.mark.plugin("volview")
+def test_live_job_blocks_resource_rest_delete(server, owner, launchFolder):
+    from girder_jobs.constants import JobStatus
+    from girder_jobs.models.job import Job
+
+    job, outputFolder = _makeOwnedJob(owner, launchFolder, status=JobStatus.RUNNING)
+
+    def _deleteResources(payload):
+        return server.request(
+            path="/resource",
+            method="DELETE",
+            user=owner,
+            params={"resources": json.dumps(payload)},
+            isJson=False,
+            exception=True,
+        )
+
+    # Folder ids resolve through the subtree walk...
+    resp = _deleteResources({"folder": [str(launchFolder["_id"])]})
+    assert resp.output_status.startswith(b"409")
+    assert _folderExists(outputFolder["_id"])
+    assert _jobExists(job["_id"])
+
+    # ...and collection ids through the base-parent check.
+    collection, colLaunch = _collectionLaunchFolder(owner, name="cascade-batch")
+    colJob, colOutput = _makeOwnedJob(owner, colLaunch, status=JobStatus.RUNNING)
+    resp = _deleteResources({"collection": [str(collection["_id"])]})
+    assert resp.output_status.startswith(b"409")
+    assert _folderExists(colOutput["_id"])
+    assert _jobExists(colJob["_id"])
+
+    for liveJob in (job, colJob):
+        Job().updateJob(_reload(liveJob), status=JobStatus.SUCCESS)
+    resp = _deleteResources(
+        {
+            "folder": [str(launchFolder["_id"])],
+            "collection": [str(collection["_id"])],
+        }
+    )
+    assert resp.output_status.startswith(b"200")
+    assert not _folderExists(outputFolder["_id"])
+    assert not _folderExists(colOutput["_id"])
+    assert not _jobExists(job["_id"])
+    assert not _jobExists(colJob["_id"])
