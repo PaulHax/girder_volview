@@ -82,39 +82,23 @@ export async function openModuleTab(page: Page, name: string): Promise<void> {
   await page.locator(`button[data-testid="module-tab-${name}"]`).click();
 }
 
-// Open the Jobs tab and reveal the first succeeded job's results ("Show results").
-export async function showJobResults(page: Page): Promise<void> {
+// Open the Jobs tab and click the first succeeded job's "Load results" — the
+// come-back path: this fetches the results AND applies them through the same
+// intent-honoring pipeline the live flow uses (labelmap → segment group on the
+// reconstructed parent image, plain image → new dataset). The button then
+// yields to informational result rows.
+export async function loadJobResults(page: Page): Promise<void> {
   await openModuleTab(page, 'Jobs');
   const panel = page.locator('.jobs-module');
-  const show = panel.getByRole('button', { name: 'Show results' }).first();
-  await expect(show, 'no "Show results" — is the succeeded job listed in the Jobs tab?').toBeVisible();
-  await show.click();
-  await expect(panel.locator('.result-row').first(), 'no result row after Show results').toBeVisible();
-}
-
-// Click a per-result apply action by its exact button label (Open / Add as layer
-// / Add as segment group). The layer/segment-group actions need a loaded base
-// image (currentImageID) or they render disabled.
-export async function applyResult(page: Page, label: string): Promise<void> {
-  const btn = page
-    .locator('.jobs-module .result-actions')
-    .getByRole('button', { name: label, exact: true })
-    .first();
-  await expect(btn, `apply button "${label}" not found/enabled (base image loaded?)`).toBeEnabled();
-  await btn.click();
-}
-
-// The "Applied <name>" success toast the apply raises.
-export async function expectAppliedToast(page: Page): Promise<void> {
-  await expect(
-    page.locator('.Vue-Toastification__toast', { hasText: 'Applied' }).first(),
-    'no "Applied …" success toast'
-  ).toBeVisible();
+  const load = panel.getByRole('button', { name: 'Load results' }).first();
+  await expect(load, 'no "Load results" — is the succeeded job listed in the Jobs tab?').toBeVisible();
+  await load.click();
+  await expect(panel.locator('.result-row').first(), 'no result row after Load results').toBeVisible();
 }
 
 // ---------------------------------------------------------------------------
-// Live submission path (the VISIBLE UI flow, distinct from the manual "Show
-// results" + apply-button path above): task picker -> task form -> provenance
+// Live submission path (the VISIBLE UI flow, distinct from the come-back
+// "Load results" path above): task picker -> task form -> provenance
 // binding -> Submit -> poll -> LIVE auto-apply (JobsModule.onMounted subscribes
 // to onJobComplete and auto-applies). This is the CI submission gate's driver.
 // ---------------------------------------------------------------------------

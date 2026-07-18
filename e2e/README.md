@@ -69,20 +69,22 @@ of scope; the mechanics hold with or without a painted edit.
 ### `run-and-apply.spec.ts` — the jobs/processing plane
 
 Setup submits an **Otsu** segmentation over REST (`helpers/jobs.ts` — the same
-folder + user the tab runs as) and polls it to success; each test then launches
+folder + user the tab runs as) and polls it to success; the test then launches
 VolView on that folder (the launch carries `config=`, which is what makes the
-**Jobs** tab appear, and loads the image as a base so the layer/segment-group
-applies are enabled), opens **Jobs → Show results**, and drives one apply action:
-
-- **Add as segment group** → a `new job result` chip in the Annotations
-  segment-group list;
-- **Add as layer** → a new `[data-testid="layer-opacity-slider"]` in Rendering;
-- **Open** → a new image (`.dataset-menu`) in Data;
-- each with the `Applied …` success toast.
+**Jobs** tab appear, and loads the image as a base) and drives the **come-back
+path**: the job finished before the tab existed, so nothing auto-applies until
+the user clicks **Jobs → Load results**, which fetches the results and applies
+them by declared intent — the Otsu labelmap attaches as a `new job result`
+segment group (Annotations list) on the parent image reconstructed from the
+job's persisted input provenance. The button is consumed by the load, so a
+result never applies twice. There are no per-result verb buttons; scene
+composition beyond the declared intent lives in the Data panel and the
+segment-group menu.
 
 Job submission is REST (setup), not the multi-step task form — keeping the test
-focused on the apply path and folder/user scoping. Complements the Python REST
-correlation test (`tests/test_end_to_end_live.py`), which proves the server side.
+focused on the come-back path and folder/user scoping. Complements the Python
+REST correlation test (`tests/test_end_to_end_live.py`), which proves the
+server side.
 
 ## How provisioning works
 

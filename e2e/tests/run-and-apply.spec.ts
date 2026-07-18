@@ -11,9 +11,7 @@ import { submitOtsu } from '../helpers/jobs';
 import {
   waitForVolViewReady,
   openModuleTab,
-  showJobResults,
-  applyResult,
-  expectAppliedToast,
+  loadJobResults,
   selectTask,
   waitForInputBound,
   submitTaskFromForm,
@@ -23,17 +21,18 @@ import {
 
 // The jobs/processing plane in the browser (complements the Python REST test).
 // Setup submits an Otsu job over REST (folder+user scoped to the same admin the
-// tab runs as), polls it to success, then each test launches VolView on that
+// tab runs as), polls it to success, then the test launches VolView on that
 // folder — the launch carries config= (which is what makes the Jobs tab appear)
-// and loads the image as a base (needed for the layer/segment-group applies) —
-// opens Jobs -> "Show results", clicks an apply action, and asserts the apply
-// signal + the "Applied …" toast.
+// and loads the image as a base — and drives the COME-BACK path: the job
+// finished before this tab existed, so Jobs -> "Load results" fetches and
+// applies by declared intent (the Otsu labelmap attaches as a segment group to
+// the parent image reconstructed from the persisted input provenance).
 
 test.describe.configure({ mode: 'serial' });
 
-test.describe('jobs run + apply path', () => {
-  // Submit the Otsu job once (REST) for the whole suite; the launched tabs just
-  // apply its result.
+test.describe('jobs come-back path (Load results)', () => {
+  // Submit the Otsu job once (REST) for the whole suite; the launched tab just
+  // loads its result.
   test.beforeAll(async () => {
     const req = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
     try {
@@ -43,7 +42,7 @@ test.describe('jobs run + apply path', () => {
       const { jobId, state } = await submitOtsu(req, token, folderId, itemId);
       expect(state, `Otsu job ${jobId} did not succeed (state=${state})`).toBe('success');
       // eslint-disable-next-line no-console
-      console.log(`[e2e] Otsu job ${jobId} succeeded — folder ${folderId} ready for apply tests`);
+      console.log(`[e2e] Otsu job ${jobId} succeeded — folder ${folderId} ready for come-back test`);
     } finally {
       await req.dispose();
     }
@@ -54,69 +53,35 @@ test.describe('jobs run + apply path', () => {
     g = await setup(request, context);
   });
 
-  // Launch VolView on the folder with the image as a base + config= (Jobs tab),
-  // then reveal the job results.
-  async function launchToJobResults(page: import('@playwright/test').Page) {
+  test('Load results applies the labelmap as a segment group on the original image', async ({ page }, info) => {
     const { url } = launchUrl(g, 'checked'); // loads g.itemId as base + config=
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await waitForVolViewReady(page);
-    await showJobResults(page);
-  }
 
-  test('Jobs tab lists the succeeded job and reveals a result', async ({ page }, info) => {
-    await launchToJobResults(page);
+    // The come-back job must NOT auto-apply: before the explicit load there is
+    // no segment group and no result row.
+    await openModuleTab(page, 'Annotations');
+    await expect(
+      page.locator('.segment-group-list').getByText('new job result'),
+      'a history job auto-applied without "Load results"'
+    ).toHaveCount(0);
+
+    await loadJobResults(page);
     await shot(page, info, 'jobs-tab-results');
     await expect(page.locator('.jobs-module .result-row').first()).toBeVisible();
-  });
+    // The button is consumed: loading = applying, exactly once.
+    await expect(
+      page.locator('.jobs-module').getByRole('button', { name: 'Load results' })
+    ).toHaveCount(0);
 
-  test('Add as segment group → new-job-result chip + Applied toast', async ({ page }, info) => {
-    await launchToJobResults(page);
-    await applyResult(page, 'Add as segment group');
-    await expectAppliedToast(page);
-    // The result becomes a segment group tagged "new job result" in Annotations.
+    // Intent-honoring apply: the labelmap became a "new job result" segment
+    // group on the reconstructed parent image (no manual verb choice).
     await openModuleTab(page, 'Annotations');
     await expect(
       page.locator('.segment-group-list').getByText('new job result').first(),
       'no "new job result" chip in the segment-group list'
-    ).toBeVisible();
-    await shot(page, info, 'apply-segment-group');
-  });
-
-  test('Add as layer → new layer slider + Applied toast', async ({ page }, info) => {
-    await launchToJobResults(page);
-    await applyResult(page, 'Add as layer');
-    await expectAppliedToast(page);
-    // A layer with an opacity slider now exists in Rendering.
-    await openModuleTab(page, 'Rendering');
-    await expect(
-      page.locator('[data-testid="layer-opacity-slider"]').first(),
-      'no layer-opacity-slider after Add as layer'
-    ).toBeVisible();
-    await shot(page, info, 'apply-layer');
-  });
-
-  test('Open → new dataset + Applied toast', async ({ page }, info) => {
-    const { url } = launchUrl(g, 'checked');
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-    await waitForVolViewReady(page);
-
-    // Baseline image count in the Data tab (the one launched image), then apply.
-    // Non-DICOM images render in ImageDataBrowser, one `.dataset-menu` per image
-    // (the `dataset-menu-button` testid is the DICOM PatientStudyVolumeBrowser).
-    await openModuleTab(page, 'Data');
-    const datasets = page.locator('.dataset-menu');
-    const before = await datasets.count();
-
-    await showJobResults(page);
-    await applyResult(page, 'Open');
-    await expectAppliedToast(page);
-
-    // "Open" loads the result as a new base dataset.
-    await openModuleTab(page, 'Data');
-    await expect
-      .poll(() => datasets.count(), { message: 'Open did not add a dataset', timeout: 20_000 })
-      .toBeGreaterThan(before);
-    await shot(page, info, 'apply-open');
+    ).toBeVisible({ timeout: 30_000 });
+    await shot(page, info, 'come-back-apply');
   });
 });
 
@@ -126,7 +91,7 @@ test.describe('jobs run + apply path', () => {
 // result stream -> LIVE auto-apply — with token-only auth (no girderToken
 // cookie). This is the gate that fails if selection, submission, polling,
 // authenticated byte download, or live auto-apply regresses. The REST-seeded
-// manual-apply cases above are kept for history/manual-apply coverage only.
+// come-back case above covers the explicit "Load results" path only.
 // ---------------------------------------------------------------------------
 test.describe('token-only run + live auto-apply (the submission gate)', () => {
   test('launches token-only, submits from the UI, and live-auto-applies without a cookie', async ({
@@ -167,7 +132,7 @@ test.describe('token-only run + live auto-apply (the submission gate)', () => {
       await submitTaskFromForm(page);
 
       // Poll to live completion (the store's own toast), then confirm LIVE
-      // auto-apply attached the result with NO manual "Show results"/apply click:
+      // auto-apply attached the result with NO manual "Load results" click:
       // the Otsu labelmap becomes a "new job result" segment group.
       await waitForJobComplete(page);
       await openModuleTab(page, 'Annotations');
