@@ -1,14 +1,14 @@
 """Conformance for the declarative result intents the processing backend emits.
 
 Results cross the wire as declarative *intents* the client's single applier
-applies — never a ``role`` the client switches on (the result-intents contract).
-``_collectJobResults`` builds each output's intent via ``_intentForOutput``; a
-labelmap's segment names/colors travel inside the ``.seg.nrrd`` file as embedded
-metadata the client reads, so the backend sets no ``segments`` payload.
-This suite exercises the pure intent builder and, like the
-VolView ``wire.spec.ts`` client suite, validates BOTH the backend's emitted
-intents and the shared golden fixtures against the same generated JSON Schema
-(``result-intent.schema.json``) — one normative definition, two validators.
+applies — never a ``role`` the client switches on. ``_collectJobResults`` builds
+each output's intent via ``_intentForOutput``; a labelmap's segment names/colors
+travel inside the ``.seg.nrrd`` file as embedded metadata the client reads, so
+the backend sets no ``segments`` payload.
+
+This suite exercises the pure intent builder and validates BOTH the backend's
+emitted intents and the shared golden fixtures against the same generated JSON
+Schema (``result-intent.schema.json``) — one normative definition, two validators.
 """
 
 import jsonschema
@@ -32,16 +32,15 @@ def _intent_validator():
 
     The generated schema is the backend-side stand-in for the normative ``zod``
     ``resultIntentSchema`` (internal conformance tooling, not the contract
-    format itself). ``jsonschema`` is a hard test dep: a missing
-    validator FAILS this conformance layer, never silently skips it.
+    format itself). ``jsonschema`` is a hard test dep: a missing validator FAILS
+    this conformance layer, never silently skips it.
     """
     schema = contract_loader.load_generated_schema("result-intent")
     return jsonschema.Draft202012Validator(schema)
 
 
 # ---------------------------------------------------------------------------
-# The intent builder emits the v1 vocabulary with add-segment-group (NOT the
-# retired attach-segment-group) and a source provenance tag.
+# The intent builder emits add-segment-group with a source provenance tag.
 # ---------------------------------------------------------------------------
 
 
@@ -71,7 +70,7 @@ def test_non_image_file_has_no_state_intent():
 # ---------------------------------------------------------------------------
 # add-segment-group carries source:{jobId, outputId} and sets NO `segments`
 # payload — a `.seg.nrrd` labelmap carries its names/colors as embedded metadata
-# the client reads on load, so the backend folds no sidecar.
+# the client reads on load.
 # ---------------------------------------------------------------------------
 
 
@@ -97,7 +96,6 @@ def test_job_id_is_stringified():
 
 
 def test_embedded_labelmap_carries_no_segments():
-    # A seg.nrrd with embedded metadata folds no sidecar -> no `segments`.
     intent = _intentForOutput(_out("image", True), _URL, _NAME, _JOB_ID)
     assert "segments" not in intent
 
@@ -110,16 +108,14 @@ def test_base_image_and_ordinary_file_carry_no_source_or_segments():
 
 
 # ---------------------------------------------------------------------------
-# The emitted intents validate against the generated JSON Schema (the backend
-# side of "both suites validate intent payloads against the same fixtures").
+# The emitted intents validate against the generated JSON Schema.
 # ---------------------------------------------------------------------------
 
-# The backend emits the embedded (no-`segments`) labelmap shape; the
-# optional `segments` shape stays contract-valid and is covered by the
-# fixture-schema check below, but the backend no longer produces it.
-# `_intentForOutput` emits the INTENT only; `_collectJobResults` later adds the
-# file `id` (and mimeType/size). Inject a stand-in id so each emitted row is a
-# full result-list item the now-id-required schema accepts.
+# The backend emits the embedded (no-`segments`) labelmap shape; the optional
+# `segments` shape stays contract-valid and is covered by the fixture-schema
+# check below. `_intentForOutput` emits the INTENT only; `_collectJobResults`
+# later adds the file `id` (and mimeType/size). Inject a stand-in id so each
+# emitted row is a full result-list item the id-required schema accepts.
 _RESULT_ID = "6600000000000000000000ff"
 _EMITTED_CASES = {
     "add-segment-group.embedded": {
@@ -147,7 +143,7 @@ def test_emitted_intent_validates_against_schema(stem):
 # The shared golden fixtures validate against the same schema, exactly as the
 # client's zod suite parses them — the single-source parity check. The unknown
 # fixture (add-polygon) validates via the schema's fail-OPEN branch so the
-# client applier can preserve the row without applying a state action.
+# client applier preserves the row without applying a state action.
 # ---------------------------------------------------------------------------
 
 _INTENT_FIXTURES = sorted(
@@ -175,8 +171,7 @@ def test_unknown_intent_fixture_is_accepted_fail_open():
 
 def test_emitted_add_segment_group_matches_fixture_shape():
     # The backend's emitted labelmap intent has the same key set as the golden
-    # embedded add-segment-group fixture the client validates (the backend
-    # emits no `segments` payload — names/colors ride inside the file).
+    # embedded add-segment-group fixture the client validates.
     embedded = _intentForOutput(_out("image", True), _URL, _NAME, _JOB_ID)
     embedded_fixture = contract_loader.load_fixture(
         "wire/intent.add-segment-group.embedded.json"

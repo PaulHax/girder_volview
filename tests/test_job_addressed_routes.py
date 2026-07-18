@@ -1,32 +1,20 @@
-"""Server-fixture coverage for job-addressed routes + cancel.
+"""Server-fixture coverage for job-addressed routes + cancel, against real Girder
+job models + the live cherrypy pipeline.
 
-Exercised against real Girder job models + the live cherrypy pipeline:
+Status and results are reachable by job id alone
+(``/volview_processing/jobs/<id>[/results]``) -- the launch folder is not part of
+a job's identity -- so the job's own ACL is the only boundary: status is
+READ-gated, cancel is WRITE-gated. Cancel is best-effort: it projects the neutral
+``cancelled`` for a live job, and reports an already-terminal job's real state
+rather than fabricating one.
 
-1. *Folder-free addressing* -- status and results are reachable by job id alone
-   (``/volview_processing/jobs/<id>[/results]``), no folder in the path. The
-   launch folder is not part of a job's identity.
-2. *Cancel projects to the neutral ``cancelled``* -- ``POST .../cancel`` on a
-   live (running) job drives Girder cancellation and the response projects the
-   neutral ``cancelled`` state, with the job actually CANCELED in Mongo.
-3. *Best-effort, never fabricated* -- cancelling an already-terminal (succeeded)
-   job is a no-op that honestly reports ``success``, never a fake ``cancelled``.
-4. *Fail closed on the job's own ACL* -- a non-owner cannot even read a private
-   job's status (403), and a read-only viewer of a public job is blocked from
-   cancelling it (cancel is WRITE-gated, status is READ-gated).
-
-Like ``test_job_output_binding_routes`` this needs a live pytest-girder server +
-Mongo; the module self-skips when the test Mongo is unreachable so the offline
-gate stays green, and runs (and must pass) wherever Mongo is present.
+Needs a live pytest-girder server + Mongo; self-skips when the test Mongo is
+unreachable so the offline gate stays green.
 """
 
 from conftest import mongo_reachable
 
 import pytest
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -134,7 +122,6 @@ def test_status_route_is_job_addressed_no_folder(server, owner):
 
     assert resp.output_status.startswith(b"200")
     assert resp.json["jobId"] == str(job["_id"])
-    # RUNNING projects to the neutral `running` (no folder was needed to get here).
     assert resp.json["state"] == "running"
     assert resp.json["resultState"] == "waiting"
 
@@ -163,8 +150,7 @@ def test_status_route_includes_error_tail(server, owner):
 @pytest.mark.plugin("volview")
 def test_results_route_is_job_addressed_no_folder(server, owner):
     # A job with no recorded outputs that is not succeeded returns the explicit
-    # error (never a silent []), proving the folder-free results route
-    # still routes to the preserved handler body.
+    # error, never a silent [].
     job = _makeJob(owner)  # INACTIVE
     resp = _get(server, RESULTS_PATH % job["_id"], owner)
     assert resp.output_status.startswith(b"409")

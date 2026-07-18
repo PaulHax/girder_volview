@@ -1,9 +1,9 @@
 """Server-fixture coverage for proxiable download headers.
 
 The proxiable download route passes ``headers=False`` to ``File().download`` so an
-S3 assetstore can proxy/redirect -- which also suppressed Girder's default download
-headers, leaving a proxied file served with cherrypy's ``text/html`` default and no
-``Content-Disposition`` (the outlier this route closes). The fix always serves
+S3 assetstore can proxy/redirect, which also suppresses Girder's default download
+headers -- leaving a proxied file with cherrypy's ``text/html`` default and no
+``Content-Disposition``. The route therefore always serves
 ``Content-Disposition: attachment`` + an inert ``application/octet-stream`` so a
 proxied file can never render inline in a browser.
 
@@ -17,11 +17,6 @@ import io
 from conftest import mongo_reachable
 
 import pytest
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -110,9 +105,9 @@ def test_proxiable_download_forces_attachment_and_inert_type(
 def test_minted_handle_path_serves_a_reserved_char_named_file(
     server, owner, ownerFolder
 ):
-    # The load leg: the emitted load handle percent-encodes the
-    # name segment, so the exact path portion of the backend's OWN mint must
-    # serve the bytes -- no browser fragment/query splitting, no 404.
+    # The emitted load handle percent-encodes the name segment, so the exact
+    # path portion of the backend's OWN mint must serve the bytes -- no browser
+    # fragment/query splitting, no 404.
     from girder_volview.utils import makeFileDownloadUrl
 
     f = _upload(owner, ownerFolder, "scan #2 ?phase.nrrd", content=b"abc")

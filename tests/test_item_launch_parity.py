@@ -1,36 +1,21 @@
-"""Server-fixture coverage for item-launch parity (the status/results contract),
-against real Girder models + the live cherrypy pipeline.
+"""Server-fixture coverage for item-launch parity, against real Girder models +
+the live cherrypy pipeline.
 
-The pin (client-processing-contract.md "Item-launch parity in v1"): the Jobs tab
-and the full job flow work from single-item launches; the *backend* derives the
-launch context from the item's PARENT folder, and the client is unaffected
-(input URIs come from provenance regardless of launch shape; job status/results/
-cancel are job-addressed). The three launch-context-scoped routes
--- ``listTasks`` / ``runTask`` / ``stageInput`` -- stay folder-scoped and, for an
-item launch, must operate on the item's parent folder.
+A single-item launch runs the whole job flow: the backend derives the launch
+context from the item's PARENT folder. There is no item-scoped processing route.
+An item-launched client only reads the processing provider ``baseUrl`` served
+over the trusted ``config=`` channel, which the launcher scopes to the item's
+parent folder (``open.js`` builds ``configParam(item.folderId)``; the composed
+item manifest carries no config resource, so that URL is the one and only config
+channel) -> ``/folder/{parentId}/volview_config/...`` ->
+``buildProcessingConfigBlock`` -> ``_providerBaseUrl(parentFolder)``. So every
+test below *derives* the launch folder from the served config exactly as the
+client would, then drives the three launch-context-scoped routes -- ``listTasks``
+/ ``runTask`` / ``stageInput`` -- at that derived folder and asserts parity with
+the parent folder.
 
-There is NO item-scoped processing route and NO client change: an item-launched
-client only ever reads the processing provider ``baseUrl`` it was served over
-the trusted ``config=`` channel, which the girder_volview launcher scopes to
-the item's PARENT folder (``open.js`` builds ``configParam(item.folderId)`` --
-the composed item manifest carries no config resource, so the
-launcher's config URL is the one and only config channel) ->
-``/folder/{parentId}/volview_config/...`` -> ``buildProcessingConfigBlock`` ->
-``_providerBaseUrl(parentFolder)``. So every test below *derives* the launch
-folder from the served config exactly as the client would, then drives the three
-routes at that derived folder and asserts parity with the parent folder.
-
-Proven here (needs a live pytest-girder Mongo; self-skips when unreachable so the
-offline gate stays green, and must pass wherever Mongo is present):
-
-1. *Derivation* -- an item launch's served processing provider ``baseUrl`` is
-   scoped to the item's parent folder (the load-bearing fact for item launches).
-2. *listTasks* under an item launch reaches the parent folder and returns the
-   catalog; the parent-folder READ ACL still gates a stranger.
-3. *runTask* under an item launch stamps the job's launch context as the parent
-   folder (launch-context coherence) and defaults output back to that same folder.
-4. *stageInput* under an item launch lands the transient item in the parent
-   folder.
+Needs a live pytest-girder Mongo; self-skips when unreachable so the offline gate
+stays green.
 """
 
 import json
@@ -42,11 +27,6 @@ import pytest
 from girder_volview.backend import inputs, outputs, routes, slicer_spec, submit
 
 
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
-# ---------------------------------------------------------------------------
-
-
 pytestmark = pytest.mark.skipif(
     not mongo_reachable(),
     reason="needs a live pytest-girder Mongo (like test_staging_routes); "
@@ -55,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 
 
 # A minimal CLI with one output param so runTask's translate step sets the
-# default output folder ({param}_folder) — the "default output folder" sub-scope.
+# default output folder ({param}_folder).
 _CLI_XML = (
     '<?xml version="1.0"?>'
     "<executable><category>Segmentation</category><title>Seg</title>"
@@ -189,10 +169,8 @@ def _segment_after(url, key):
 
 def _served_launch_folder_id(server, item, user):
     """Reproduce, exactly as the client does, the item -> parent-folder launch
-    derivation: the launcher scopes the trusted ``config=`` URL to the item's
-    parent folder (open.js ``configParam(item.folderId)``); follow it to the
-    config route and return the folder id the served processing provider is
-    scoped to.
+    derivation: follow the launcher's trusted ``config=`` URL to the config route
+    and return the folder id the served processing provider is scoped to.
     """
     config_folder_id = str(item["folderId"])
     config = _get(server, CONFIG_PATH % config_folder_id, user)
@@ -210,15 +188,14 @@ def _served_launch_folder_id(server, item, user):
 def test_item_launch_derives_processing_context_from_parent_folder(
     server, owner, parentFolder, launchItem
 ):
-    # The item manifest is the restored compose-direct manifest
-    # (filesToManifest -> {"resources": [...]}) and must load for a plain image
-    # item...
+    # The item manifest is compose-direct (filesToManifest -> {"resources": [...]})
+    # and must load for a plain image item...
     manifest = _get(server, ITEM_MANIFEST_PATH % launchItem["_id"], owner)
     assert "resources" in manifest.json
 
-    # ...while the launcher-scoped parent-folder config advertises a
-    # processing provider whose baseUrl is the parent folder's
-    # volview_processing surface — no item-scoped route exists.
+    # ...while the launcher-scoped parent-folder config advertises a processing
+    # provider whose baseUrl is the parent folder's volview_processing surface --
+    # no item-scoped route exists.
     config = _get(server, CONFIG_PATH % parentFolder["_id"], owner)
     provider = config.json["processing"]["providers"][0]
     assert provider["baseUrl"] == (
@@ -296,10 +273,10 @@ def test_run_task_under_item_launch_stamps_and_outputs_to_parent_folder(
     assert resp.output_status.startswith(b"200")
 
     # The output name is SERVER-OWNED: the client-supplied "result.nrrd" is
-    # discarded and the deterministic server basename wins (C-01, no path traversal).
+    # discarded and the deterministic server basename wins (no path traversal).
     serverName = "output.Seg.outputVolume.nii.gz"
-    # The output is forced into the job's NEW private output folder -- a child of
-    # the derived launch (parent) folder -- NOT the parent folder itself.
+    # The output is forced into the job's private output folder -- a child of the
+    # derived launch (parent) folder -- NOT the parent folder itself.
     assert runStub["params"]["outputVolume"] == serverName
     outputFolderId = runStub["params"]["outputVolume_folder"]
     assert outputFolderId != str(parentFolder["_id"])

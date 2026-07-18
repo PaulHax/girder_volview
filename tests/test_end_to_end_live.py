@@ -1,22 +1,14 @@
 """End-to-end live-stack tests: submit a real job and prove the result comes back.
 
-Unlike the pytest-girder route tests (``test_job_output_binding_routes`` et al.),
-which drive an *in-process* server and exercise the output-upload lifecycle
-event, these run against the **real running dsa stack** -- girder on :8080 +
-``girder_worker`` + the registered ``volview-radiology-cli`` docker image. They
-therefore exercise the one leg no offline test can reach: ``girder_worker``
-uploading each output under its OWN per-hook token, and the backend correlating
-that upload back to the job. That correlation (the token-mismatch fix,
-backend ``c499b78``) is the whole payoff -- a succeeded job whose results actually
-appear -- and on the pre-fix code this exact flow left ``volviewOutputs`` ``{}``
-and ``/results`` a silent ``[]``.
+These run against the **real running dsa stack** -- girder on :8080 +
+``girder_worker`` + the registered ``volview-radiology-cli`` docker image -- so
+they exercise the one leg no offline test can reach: ``girder_worker`` uploading
+each output under its OWN per-hook token, and the backend correlating that upload
+back to the job.
 
-Self-skipping on reachability -- the same pattern ``test_job_output_binding_routes``
-uses for its test Mongo: they run automatically when the dsa stack answers at
-``GIRDER_URL`` and skip when it does not, so the offline gate (``tox -e test``)
-stays green with the stack down and gains real coverage when it is up. No env
-var to remember -- just bring the stack up with the radiology CLI tasks
-registered in slicer_cli_web::
+They run automatically when the dsa stack answers at ``GIRDER_URL`` and skip when
+it does not, so the offline gate stays green with the stack down. Bring the stack
+up with the radiology CLI tasks registered in slicer_cli_web::
 
     python -m pytest tests/test_end_to_end_live.py -v
 
@@ -33,8 +25,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Reachability self-skip (mirrors test_job_output_binding_routes, but gates on
-# the *real* stack at GIRDER_URL, not the pytest-girder test Mongo)
+# Reachability self-skip
 # ---------------------------------------------------------------------------
 
 GIRDER_URL = os.environ.get("GIRDER_URL", "http://localhost:8080")
@@ -112,7 +103,7 @@ def _write_dicom_series(dest_dir, slices=12, rows=48, cols=48):
 
     The CLI's GDCM series read (assemble._read_dicom_series) groups by
     SeriesInstanceUID and orders by slice position, so the N slices assemble into
-    one 3D volume -- the whole point of the multi-file test.
+    one 3D volume.
     """
     import numpy as np
     import pydicom
@@ -245,7 +236,7 @@ def _assert_labelmap_result(gc, job_id, final, tmp_path):
             % (job_id, final.get("state"), final.get("errorTail"), tail)
         )
 
-    # The correlation payoff: the worker's per-hook upload bound to THIS job.
+    # The worker's per-hook upload bound to THIS job.
     job = gc.get("job/%s" % job_id)
     outputs = job.get("volviewOutputs") or {}
     assert outputs, "volviewOutputs empty -- output->job correlation broke (silent [])"
@@ -257,16 +248,15 @@ def _assert_labelmap_result(gc, job_id, final, tmp_path):
     assert intents, "/results returned no intents for a succeeded job"
     seg = next((r for r in intents if r.get("intent") == "add-segment-group"), None)
     assert seg is not None, "no add-segment-group intent in %s" % intents
-    # Correlated to THIS job, and the bound file is real + ACL-served.
     assert seg.get("source", {}).get("jobId") == job_id
     fileDoc = gc.getFile(seg["id"])
     assert fileDoc and int(fileDoc.get("size") or 0) > 0
-    # The segment name/color travel INSIDE the .seg.nrrd (the backend
-    # sets no `segments` payload) — prove it from the output file's own header.
+    # The segment name/color travel INSIDE the .seg.nrrd; the backend sets no
+    # `segments` payload, so prove them from the output file's own header.
     assert seg["name"].endswith(".seg.nrrd"), (
         "labelmap output is not a .seg.nrrd: %s" % seg.get("name")
     )
-    assert "segments" not in seg, "backend should fold no sidecar (Chunk 34)"
+    assert "segments" not in seg, "backend should fold no sidecar"
     header = _seg_nrrd_header(gc, seg["id"], tmp_path)
     assert "Segment0_Name" in header and "Segment0_Color" in header, (
         "embedded segment metadata missing from the .seg.nrrd header:\n%s" % header
@@ -305,7 +295,7 @@ def e2e_folder(gc):
 
 
 # ---------------------------------------------------------------------------
-# 1. Single-volume segmentation -- the output->job token-correlation regression
+# 1. Single-volume segmentation -- output->job correlation
 # ---------------------------------------------------------------------------
 
 
@@ -339,10 +329,8 @@ def test_crashed_cli_reports_error_not_silent_success(gc, e2e_folder, tmp_path):
     job to ERROR with a non-empty log tail, and /results must return the explicit
     non-success 400 -- never a silent success with empty results.
 
-    This is the dispatcher-honesty payoff: ``cli_list`` now propagates
-    the child's exit code, so girder_worker sees a non-zero exit and marks the job
-    failed. On the pre-fix image the crashed CLI exited 0, the job reported
-    ``success``, and ``/results`` was a silent ``[]``.
+    ``cli_list`` propagates the child's exit code, so girder_worker sees a
+    non-zero exit and marks the job failed.
     """
     import girder_client
 
@@ -368,16 +356,13 @@ def test_crashed_cli_reports_error_not_silent_success(gc, e2e_folder, tmp_path):
     log_tail = "".join((job.get("log") or [])[-25:])
     combined = (final.get("errorTail") or "") + log_tail
     assert combined.strip(), "error job carried no log tail"
-    # Specifically the lower>upper guard fired -- not some unrelated failure --
-    # so this stays a regression wall for the crash path, not just "any error".
+    # Specifically the lower>upper guard fired, not some unrelated failure.
     assert "Lower threshold" in combined, (
         "error tail did not mention the threshold guard: %r" % combined[-500:]
     )
 
-    # /results is a typed conflict (409 results_unavailable), not an empty list.
-    # A crashed job is resultState="unavailable", which the route serves as 409
-    # (see results._jobResultsPayload and
-    # test_results_route_errors_on_non_succeeded_job).
+    # A crashed job is resultState="unavailable", which /results serves as a
+    # typed 409 conflict rather than an empty list.
     with pytest.raises(girder_client.HttpError) as exc:
         gc.get("volview_processing/jobs/%s/results" % job_id)
     assert exc.value.status == 409
@@ -395,9 +380,8 @@ def test_multifile_dicom_series_result_correlates_to_job(gc, e2e_folder, tmp_pat
     background: N proxiable uris (one per slice) with ``format:"dicom-series"``.
     The backend forwards N Girder file ids; the CLI's ``inputVolume`` carries
     ``reference="_girder_id_"`` so slicer_cli_web passes the ids through and the
-    CLI fetches + GDCM-assembles them into one 3D volume before segmenting. Before
-    that wiring, this submit 400'd with ``Invalid ObjectId`` (a single ``<image>``
-    only accepts one id).
+    CLI fetches + GDCM-assembles them into one 3D volume before segmenting. A
+    plain single ``<image>`` accepts only one id and 400s on a series.
     """
     pytest.importorskip("pydicom")
     slices = _write_dicom_series(str(tmp_path / "series"))

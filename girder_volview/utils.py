@@ -16,18 +16,14 @@ SESSION_EXTENSIONS = (SESSION_ZIP_EXTENSION, SESSION_JSON_EXTENSION)
 # (re-fetched via the job) but are filtered OUT of the launch manifest, so
 # VolView's native `loadSegmentations` convention never also grabs them (they
 # carry no `source` tag, so the client could not dedup against a double-apply).
-# Folder ownership subsumes the old per-item `volviewJobOutput` tag — an item's
-# parent folder marker is the single exclusion signal. Same exclusion site as
-# session zips (`isLoadableImage`).
+# An item's parent folder marker is the single exclusion signal, applied at the
+# same site as session zips (`isLoadableImage`).
 JOB_OUTPUT_FOLDER_META_KEY = "volviewJobOutputFolder"
 
 # Item-metadata key marking a staged, non-durable processing input (invisible to
-# session history + source listings; deleted at job end or TTL). Nothing
-# labelmap-specific rides this tag -- it is the whole staging vocabulary. Defined
-# here alongside JOB_OUTPUT_FOLDER_META_KEY (its sibling manifest-exclusion
-# marker) so the shared exclusion site ``isTransientStagedFile`` reads it directly
-# instead of reaching UP into the backend package; ``backend.inputs`` imports it
-# downward.
+# session history + source listings; deleted at job end or TTL). Defined here
+# beside JOB_OUTPUT_FOLDER_META_KEY so the shared exclusion site reads it without
+# importing UP into the backend package; ``backend.inputs`` imports it downward.
 TRANSIENT_STAGED_META_KEY = "volviewTransient"
 
 
@@ -42,9 +38,9 @@ def _promoteFilterToList(value):
     return None
 
 
-# Session-zip save naming (legacy fallback — permanent). A filter-gesture save is
-# named session.<patient/study/series…>.volview.zip so a folder can hold one
-# session per filter without collision; a plain/checked save is session.volview.zip.
+# Session-zip save naming. A filter-gesture save is named
+# session.<patient/study/series…>.volview.zip so a folder can hold one session
+# per filter without collision; a plain/checked save is session.volview.zip.
 SAFE_NAME_MAX = 80
 SESSION_NAME_MAX = SAFE_NAME_MAX * 3
 # Suffix-matched against filter keys so both 'meta.dicom.PatientID' and
@@ -164,8 +160,6 @@ LOADABLE_MIMES = (
 )
 
 
-# legacy fallback — permanent
-# (also load-bearing for `isLoadableImage` -- shared, never touchable).
 def isSessionItem(item):
     return item and any(ext in item["name"] for ext in SESSION_EXTENSIONS)
 
@@ -237,8 +231,7 @@ def isJobOutputFolderFile(file, user=None, itemCache=None, folderCache=None):
     ``volviewJobOutputFolder`` marker. Job outputs are excluded from the launch
     manifest (results take the job path only) while staying durable in the folder.
     Best-effort: an absent/unreadable parent item or folder is treated as
-    not-a-job-output (fail toward showing the file). NOT deletion machinery — the
-    manifest routes fold this in through ``isLoadableImage`` below.
+    not-a-job-output (fail toward showing the file).
     """
     item = _parentItemForFile(file, user, itemCache)
     folderId = item.get("folderId") if isinstance(item, dict) else None
@@ -269,8 +262,6 @@ def isTransientStagedFile(file, user=None, itemCache=None):
     return bool((item or {}).get("meta", {}).get(TRANSIENT_STAGED_META_KEY))
 
 
-# The legacy fallback (permanent) flows through here — the
-# ``volviewJobOutputFolder`` manifest exclusion is subsumed, not duplicated.
 def isLoadableImage(file, user=None, itemCache=None, folderCache=None):
     if isSessionFile(file):
         return False
@@ -285,10 +276,8 @@ def makeFileDownloadUrl(fileModel):
     """
     Given a file model, return a download URL for the file.
 
-    A thin delegate of :mod:`girder_volview.handles` -- the ONE mint site for
-    the proxiable load-handle scheme: the name segment is
-    percent-encoded there, so reserved delimiters (``#``, ``?``, spaces) in
-    legal Girder file names survive the wire and always parse back.
+    A thin delegate of :mod:`girder_volview.handles`, the one mint site for the
+    proxiable load-handle scheme.
 
     :param fileModel: the file model.
     :type fileModel: dict
@@ -300,10 +289,9 @@ def makeFileDownloadUrl(fileModel):
 def _toIso(value):
     """Serialize a datetime to an ISO-8601 UTC string, or ``None``.
 
-    The backend's neutral instants (e.g. a job's ``finishedAt``) travel the wire
-    as ISO-8601 UTC strings so the client treats
-    them as UTC instants — no client clock, no timezone ambiguity. Girder
-    stores naive UTC datetimes, so a naive value is tagged UTC.
+    Instants (e.g. a job's ``finishedAt``) travel the wire as ISO-8601 UTC so
+    the client reads them without clock or timezone ambiguity. Girder stores
+    naive UTC datetimes, so a naive value is tagged UTC.
     """
     if value is None:
         return None
@@ -314,7 +302,6 @@ def _toIso(value):
     return str(value)
 
 
-# legacy fallback — permanent (the legacy launch manifest shape).
 def filesToManifest(files, folderId):
     fileUrls = [
         {"url": makeFileDownloadUrl(fileEntry[1]), "name": fileEntry[1]["name"]}
@@ -334,7 +321,6 @@ def filesToManifest(files, folderId):
     return {"resources": fileUrls}
 
 
-# legacy fallback — permanent
 def sameLevelSessionFile(fileEntry):
     # if file name matches the item name, then Item.fileList has no / in the path
     # example: itemName == session.volview.zip and fileName == session.volview.zip,
@@ -348,7 +334,6 @@ def sameLevelSessionFile(fileEntry):
     return directChildSession and isSessionFile(fileEntry[1])
 
 
-# legacy fallback — permanent
 def filterLinkedSessionItemIds(fileEntries):
     sessionItemIds = {
         fileEntry[1].get("itemId")
@@ -367,8 +352,6 @@ def filterLinkedSessionItemIds(fileEntries):
     return {item["_id"] for item in matches}
 
 
-# legacy fallback — permanent: the newest-zip selection rule, the
-# session half of the legacy open-through rung.
 def newestSessionFile(fileEntries, includeFilterLinkedSessions=True):
     fileEntries = list(fileEntries)
     excludedItemIds = (
@@ -387,8 +370,6 @@ def newestSessionFile(fileEntries, includeFilterLinkedSessions=True):
     return max(sessions, key=lambda file: file[1].get("created"))
 
 
-# legacy fallback — permanent: newest zip wins, else loadable images
-# (the item-route explicit session open-through keeps the image half).
 def singleVolViewZipOrImageFiles(
     fileEntries,
     user=None,
@@ -422,11 +403,10 @@ def idStringToIdList(idString):
 def getFiles(model, docs):
     # Skip docs that did not load (a stale/deleted/inaccessible id makes
     # loadModels yield None); fileList(None) would dereference None["_id"] and
-    # 500. Mirrors getNewestDoc's `if doc` guard.
+    # 500.
     fileLists = [
         model().fileList(doc, subpath=False, data=False) for doc in docs if doc
     ]
-    # flatten
     files = [file for fileList in fileLists for file in fileList]
     return files
 

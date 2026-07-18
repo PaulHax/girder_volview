@@ -1,14 +1,9 @@
-"""Pin ``slicer_spec.parse_cli`` -- the single XML walk that replaces
-the backend's two duplicate walkers (the deleted ``_cliCategory`` and
-``_parseCliOutputs``).
-
-This is the coverage required BEFORE those walkers are deleted: it
-pins ``parse_cli(xml)["category"]`` and ``parse_cli(xml)["outputs"]`` to the
-exact values the old walkers produced (category = stripped ``<category>`` text
-or ``None``; outputs = ``{name, tag, isLabel, fileExtensions}`` descriptors for
-``<image>``/``<file>`` params on the output channel). The real radiology CLI
-XMLs are exercised alongside synthetic edge cases (whitespace, missing name,
-unparseable, non-output channel) so the consolidation is proven equivalent.
+"""Pin ``slicer_spec.parse_cli``: ``parse_cli(xml)["category"]`` (stripped
+``<category>`` text or ``None``) and ``parse_cli(xml)["outputs"]``
+(``{name, tag, isLabel, fileExtensions}`` descriptors for ``<image>``/``<file>``
+params on the output channel). The real radiology CLI XMLs are exercised
+alongside synthetic edge cases (whitespace, missing name, unparseable,
+non-output channel).
 
 Like ``test_slicer_spec_translation``, the pure-stdlib translator is loaded
 straight from its file -- importing ``girder_volview`` would pull in Girder,
@@ -148,7 +143,7 @@ def test_label_image_and_file_outputs():
     )
     assert parse_cli(xml)["outputs"] == [
         {"name": "outSeg", "tag": "image", "isLabel": True, "fileExtensions": ".nrrd"},
-        # fileExtensions is lowercased (byte-for-byte with the old walker).
+        # fileExtensions is lowercased.
         {
             "name": "outLabels",
             "tag": "file",
@@ -203,9 +198,8 @@ _REAL_CASES = [
             },
         ],
     ),
-    # The segmentation CLIs emit a single .seg.nrrd labelmap whose
-    # per-label names/colors ride inside the file -- the old `.json` sidecar
-    # (`outputLabels`) is gone, so parse_cli surfaces exactly one output.
+    # The segmentation CLIs emit a single .seg.nrrd labelmap whose per-label
+    # names/colors ride inside the file, so there is exactly one output.
     (
         "otsu-segmentation.xml",
         "Radiology",
@@ -242,8 +236,6 @@ def test_real_cli_xml_category_and_outputs(stem, category, outputs):
 
 
 def test_params_surface_is_populated_for_a_real_cli():
-    # parse_cli also exposes the raw parsed params (the third consolidated walk);
-    # a real CLI yields a non-empty ordered list.
     xml = (_CLI_XML_DIR / "median-filter.xml").read_text()
     params = parse_cli(xml)["params"]
     assert isinstance(params, list) and params

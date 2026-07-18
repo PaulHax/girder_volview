@@ -3,9 +3,6 @@ import { CONFIG } from './helpers/config';
 
 export default defineConfig({
   testDir: './tests',
-  // Self-provisioning: globalSetup health-checks the stack + verifies the deploy
-  // receipt, then creates a fresh folder + synthetic images; globalTeardown
-  // removes them. See helpers/provision.ts + README.md.
   globalSetup: require.resolve('./global.setup'),
   globalTeardown: require.resolve('./global.teardown'),
   // A full launch + render + save + reload round-trip is slow.
@@ -20,10 +17,9 @@ export default defineConfig({
   outputDir: 'test-results',
   use: {
     baseURL: CONFIG.baseURL,
-    // Fully automated + headless. `npx playwright test --headed` still works for a
-    // manual look, but it is not part of the workflow.
     headless: true,
-    // A screenshot at every checkpoint is the whole point (human eyeball).
+    // Checkpoint screenshots are a deliverable of this suite, not just failure
+    // debris.
     screenshot: 'on',
     trace: 'on',
     video: 'retain-on-failure',

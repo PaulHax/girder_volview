@@ -3,15 +3,12 @@ its golden fixtures exactly, and fail closed on constructs it cannot map.
 
 The translator (``girder_volview/backend/slicer_spec.py``) is pure standard
 library, so it is loaded directly from its file here -- importing the
-``girder_volview`` package would pull in Girder, which this suite (like
-``contract_loader``) deliberately does not need.
+``girder_volview`` package would pull in Girder, which this suite does not need.
 
-The Slicer-XML source CLIs and their expected translated specs are backend test
-fixtures, living together under ``tests/slicer_xml/`` (sources) and
-``tests/slicer_xml/expected/`` (golden translated specs). Slicer XML is a
-backend concern -- the neutral ``backend-contract`` package has no translator
-and carries no CLI-specific fixtures. Only the generated task-spec *schema*
-(the neutral validator) is loaded from the synced contract dir.
+Sources live under ``tests/slicer_xml/`` and golden translated specs under
+``tests/slicer_xml/expected/``: Slicer XML is a backend concern, so the neutral
+``backend-contract`` package carries no CLI-specific fixtures -- only the
+generated task-spec *schema* comes from the synced contract dir.
 
 Comparison is on *parsed* JSON (Python dict/list equality), so key order and
 whitespace never fail the test.
@@ -86,9 +83,8 @@ _CASE_IDS = [stem for _, _, stem in _CONFORMANCE_CASES]
 def _task_spec_validator():
     """A JSON Schema validator for the generated task-spec schema.
 
-    The generated schema is internal conformance tooling (not the contract
-    format); it is the backend-side stand-in for the normative ``zod`` schema.
-    ``jsonschema`` is a hard test dep: a missing validator FAILS this
+    The generated schema is the backend-side stand-in for the normative ``zod``
+    schema. ``jsonschema`` is a hard test dep: a missing validator FAILS this
     conformance layer, never silently skips it.
     """
     schema = contract_loader.load_generated_schema("task-spec")
@@ -147,13 +143,11 @@ def test_input_image_label_type_accepts_labelmap():
 
 
 # ---------------------------------------------------------------------------
-# b3 injection params are dropped. A CLI that fetches its own
-# inputs declares ``girderApiUrl``/``girderToken`` as ``<string>`` params so
+# Girder injection params are dropped. A CLI that fetches its own inputs
+# declares ``girderApiUrl``/``girderToken`` as ``<string>`` params so
 # ``slicer_cli_web`` can inject them at run time; these are server plumbing and
-# must never surface as client task params. The real radiology CLI XMLs now
-# carry them (the conformance cases above already prove they translate to the
-# token-free golden fixtures); this locks the behavior directly and checks that
-# skipping them does not perturb the remaining params' order numbers.
+# must never surface as client task params. Skipping them must also not perturb
+# the remaining params' order numbers.
 # ---------------------------------------------------------------------------
 
 _GIRDER_TOKEN_XML = """<?xml version="1.0" encoding="UTF-8"?>

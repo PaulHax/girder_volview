@@ -2,13 +2,11 @@
 
 The route translates a task's Slicer XML into VolView's own task spec
 server-side (the result-intents contract) and returns it as JSON. Its scope
-guards make an
-out-of-scope (pathology) / unknown / slicer_cli_web-missing taskId 404
+guards 404 an out-of-scope (pathology) / unknown / slicer_cli_web-missing taskId
 identically -- the server is the boundary.
 
-Like ``test_load`` this needs a live pytest-girder server + Mongo; the module
-self-skips when the test Mongo is unreachable so the offline gate stays green
-while the wire contract still runs where a Mongo is present.
+Needs a live pytest-girder server + Mongo; the module self-skips when the test
+Mongo is unreachable so the offline gate stays green.
 """
 
 from conftest import mongo_reachable
@@ -18,11 +16,6 @@ from pathlib import Path
 import pytest
 
 from girder_volview.backend import slicer_spec, submit
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors test_load).
-# ---------------------------------------------------------------------------
-
 
 pytestmark = pytest.mark.skipif(
     not mongo_reachable(),
@@ -92,11 +85,6 @@ def folder(db, user):
 
 def _spec_path(folder, taskId):
     return f"/folder/{folder['_id']}/volview_processing/tasks/{taskId}/spec"
-
-
-# ---------------------------------------------------------------------------
-# Happy path: a radiology id returns 200 + the translated spec JSON.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

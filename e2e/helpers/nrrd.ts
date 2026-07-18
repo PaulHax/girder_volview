@@ -1,13 +1,7 @@
-// ---------------------------------------------------------------------------
-// In-process synthetic NRRD volume generator. No external files, no network:
-// the global setup calls this and uploads the bytes straight to girder.
-//
-// The output is a minimal-but-valid detached-header-free NRRD (ASCII header +
-// blank line + raw little-endian int16 voxels) that itk-wasm — VolView's image
-// reader — loads and renders. The voxels are a simple gradient so the render is
-// visibly non-empty (for the human-eyeball pass), with two `variant`s so
-// the two uploaded images look distinct.
-// ---------------------------------------------------------------------------
+// In-process synthetic NRRD volume generator: a minimal valid NRRD (ASCII
+// header + blank line + raw little-endian int16 voxels) that itk-wasm loads and
+// renders. The voxels are a gradient so the render is visibly non-empty, with
+// two `variant`s so the uploaded images look distinct.
 export type NrrdOptions = {
   size?: number; // cube edge length in voxels (default 16)
   variant?: number; // 0 or 1 — flips the gradient so a.nrrd != b.nrrd visually
@@ -41,7 +35,7 @@ export function makeNrrd({ size = 16, variant = 0 }: NrrdOptions = {}): Buffer {
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const g = (x + y + z) / span; // 0..1 corner-to-corner gradient
-        const norm = variant ? 1 - g : g; // variant flips the direction
+        const norm = variant ? 1 - g : g;
         const value = Math.round(norm * 3000); // fits comfortably in int16
         data.writeInt16LE(value, offset);
         offset += 2;

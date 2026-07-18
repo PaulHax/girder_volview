@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Synthetic Slicer Execution Model XML — NOT a real radiology CLI. Checked in
-  beside the golden fixtures so the Chunk 6 translator conformance test can run
+  beside the golden fixtures so the translator conformance test can run
   it like the real CLI XMLs: no current radiology CLI carries a <region>, so
   this is the source that exercises `bounds` (from <region>), `enum` (from
   <string-enumeration>), and the XML-derivable UI hints (section from the panel

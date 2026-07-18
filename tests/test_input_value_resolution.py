@@ -1,10 +1,9 @@
-"""Input values, backend half: the backend resolves its OWN minted
-URI scheme back to Girder file ids and forwards them to the CLI as a ``<string>``
-param. These offline unit tests drive the pure resolver + the
-values→params translation with the golden ``input-value`` fixtures and a
-stubbed ``File`` model / ``getApiRoot`` (no live Girder — same spirit as
-``test_task_scoping``). The real ACL re-check (403) and the end-to-end submit
-route live in ``test_input_resolution_routes`` (server fixture).
+"""Input values, backend half: the backend resolves its OWN minted URI scheme
+back to Girder file ids and forwards them to the CLI as a ``<string>`` param.
+These offline unit tests drive the pure resolver + the values→params translation
+with the golden ``input-value`` fixtures and a stubbed ``File`` model /
+``getApiRoot`` (no live Girder). The real ACL re-check (403) and the end-to-end
+submit route live in ``test_input_resolution_routes`` (server fixture).
 """
 
 import json
@@ -71,9 +70,9 @@ class _DenyItem:
 def _fixed_api_root(monkeypatch):
     # Deterministic mount so the fixtures' ``/api/v1/...`` uris parse regardless
     # of ambient server config; one test flexes a non-default root explicitly.
-    # ``handles`` is the mint/parse pair's DEFINING module;
-    # ``config`` is patched too: after fix #3 the provider config's
-    # ``baseUrl``/``jobsBaseUrl`` derive from ``config.getApiRoot()``.
+    # ``handles`` is the mint/parse pair's defining module; ``config`` is patched
+    # too because the provider config's ``baseUrl``/``jobsBaseUrl`` derive from
+    # ``config.getApiRoot()``.
     monkeypatch.setattr(handles, "getApiRoot", lambda: API_ROOT)
     monkeypatch.setattr(config, "getApiRoot", lambda: API_ROOT)
 
@@ -133,9 +132,8 @@ def test_rejects_non_own_scheme_uri(uri):
     ],
 )
 def test_accepts_the_backends_own_mint_for_reserved_char_names(name):
-    # Root cause, closed: mint and parse are ONE module, so the parser
-    # accepts what the minter emits for every legal Girder file name -- both
-    # the current escaped mint and the pre-fix raw legacy shape.
+    # Mint and parse are ONE module, so the parser accepts what the minter emits
+    # for every legal Girder file name -- escaped or raw.
     fid = str(ObjectId())
     minted = utils.makeFileDownloadUrl({"_id": fid, "name": name})
     assert inputs._fileIdFromMintedUri(minted) == fid
@@ -143,9 +141,8 @@ def test_accepts_the_backends_own_mint_for_reserved_char_names(name):
 
 
 def test_parses_against_configured_api_root_not_a_literal(monkeypatch):
-    # Reconciliation flag: recover the id against getApiRoot() (how the minter
-    # builds the uri), not a hardcoded /api/v1 — a non-default mount resolves and
-    # the default-root shape no longer matches.
+    # The id is recovered against getApiRoot() (how the minter builds the uri),
+    # not a hardcoded /api/v1, so a non-default mount resolves.
     monkeypatch.setattr(handles, "getApiRoot", lambda: "girder/api/v1")
     fid = str(ObjectId())
     assert (
@@ -156,12 +153,11 @@ def test_parses_against_configured_api_root_not_a_literal(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Input-value wire conformance: the golden input-value fixtures
-# are a validating consumer of the generated ``input-value.schema.json`` — the
-# backend-side stand-in for the normative zod ``inputValueSchema`` (one normative
-# definition, two validators). These fixtures were previously loaded as
-# DATA ONLY; now every published schema has a validating consumer. ``jsonschema``
-# is a hard test dep: a missing validator FAILS, never silently skips.
+# Input-value wire conformance: the golden input-value fixtures are a validating
+# consumer of the generated ``input-value.schema.json`` — the backend-side
+# stand-in for the normative zod ``inputValueSchema`` (one normative definition,
+# two validators). ``jsonschema`` is a hard test dep: a missing validator FAILS,
+# never silently skips.
 # ---------------------------------------------------------------------------
 
 _INPUT_VALUE_FIXTURES = (
@@ -286,9 +282,8 @@ def test_submit_reuses_resolved_files_for_params_and_transient_detection(monkeyp
 
 
 def test_reserved_char_named_input_translates_without_400(monkeypatch):
-    # Acceptance: a '#'-named file's OWN backend-minted handle survives the
-    # whole submit translation -- this exact path previously raised the
-    # 400 "does not match this server's file scheme" on the backend's own mint.
+    # A '#'-named file's own backend-minted handle survives the whole submit
+    # translation.
     _acceptAll(monkeypatch)
     fid = str(ObjectId())
     value = {
@@ -427,9 +422,9 @@ def test_report_output_forced_into_private_output_folder():
 
 
 def test_submitted_output_folder_ref_is_rejected_400():
-    # Inverted from the old "respects explicit destination": a client-supplied
-    # folderRef on an output value would redirect a job's outputs out of its own
-    # (correlation-key) folder, so it is now REJECTED (not honored, not stripped).
+    # A client-supplied folderRef on an output value would redirect a job's
+    # outputs out of its own (correlation-key) folder, so it is REJECTED --
+    # neither honored nor silently stripped.
     outputFolder = {"_id": ObjectId()}
     with pytest.raises(RestException) as exc:
         submit._translateValuesToSlicerParams(
@@ -443,13 +438,12 @@ def test_submitted_output_folder_ref_is_rejected_400():
 def test_first_input_base_name_derives_from_input_uri():
     value = {"type": "image", "uris": [_mint(str(ObjectId()), "scan.nii.gz")]}
     assert submit._firstInputBaseName({"in": value}) == "scan"
-    # No bindable input present → fall back to a generic base.
     assert submit._firstInputBaseName({"threshold": 5}) == "output"
     assert submit._firstInputBaseName({}) == "output"
 
 
 # ---------------------------------------------------------------------------
-# Grouping + b1 assembly machinery and its advertisement are gone
+# Retired grouping/assembly machinery stays absent, and is not advertised
 # ---------------------------------------------------------------------------
 
 
@@ -478,13 +472,8 @@ def test_first_input_base_name_derives_from_input_uri():
     ],
 )
 def test_grouping_and_assembly_symbols_removed(symbol):
-    # NB: _cleanupTransientOnJobDone / initial fields / _removeTransientItems
-    # were deleted alongside the grouping machinery, but the transient-cleanup
-    # cluster was REBUILT for staged inputs, so they are
-    # intentionally present again and no longer belong on this removed list.
-    #
-    # The former ``processing`` monolith is gone, so the symbol must be absent
-    # from EVERY surviving backend module -- there is no single successor.
+    # There is no single successor to the former ``processing`` monolith, so the
+    # symbol must be absent from EVERY surviving backend module.
     for module in (inputs, submit, outputs, results, routes, config):
         assert not hasattr(module, symbol), (module.__name__, symbol)
 
@@ -499,11 +488,11 @@ def test_provider_config_no_longer_advertises_loaded_sources():
 
 
 def test_provider_config_advertises_explicit_jobs_base_url():
-    # The config block advertises the
-    # explicit folder-free root for the job-addressed routes (status/results/
-    # cancel) alongside the folder-scoped baseUrl, so the client never string-
-    # surgeries the folder segment out of baseUrl. It matches the _JobResource
-    # mount (routes.py) -- a sibling of /folder -- and is folder-independent.
+    # The config block advertises the explicit folder-free root for the
+    # job-addressed routes (status/results/cancel) alongside the folder-scoped
+    # baseUrl, so the client never string-surgeries the folder segment out of
+    # baseUrl. It matches the _JobResource mount (routes.py), a sibling of
+    # /folder.
     folderId = ObjectId()
     provider = config.buildProcessingConfigBlock({"_id": folderId})[
         "providers"
@@ -512,9 +501,8 @@ def test_provider_config_advertises_explicit_jobs_base_url():
     assert provider["jobsBaseUrl"] == "/api/v1/volview_processing"
     # Folder-free: no launch folder id leaks into the jobs base.
     assert str(folderId) not in provider["jobsBaseUrl"]
-    # The provider id is FOLDER-SCOPED (immutable per launch folder), not the old
-    # fixed "girder-slicer-cli". This bare dict has no name, so the label falls
-    # back to the plain "Analysis".
+    # The provider id is FOLDER-SCOPED (immutable per launch folder). This bare
+    # dict has no name, so the label falls back to the plain "Analysis".
     assert provider["id"] == ("girder-slicer-cli:%s" % folderId)
     assert provider["label"] == "Analysis"
 
@@ -539,10 +527,10 @@ def test_provider_config_id_is_folder_scoped_and_label_carries_folder_name():
 
 
 def test_provider_config_urls_derive_from_api_root_not_a_literal(monkeypatch):
-    # Fix #3: baseUrl/jobsBaseUrl are built from getApiRoot() (like file download
-    # urls), not a hardcoded /api/v1 -- so a non-default mount resolves instead of
-    # 404ing every submit/status/results call. A non-default root proves the literal
-    # was actually retired (the default-root assertion above would pass either way).
+    # baseUrl/jobsBaseUrl are built from getApiRoot() (like file download urls),
+    # not a hardcoded /api/v1, so a non-default mount resolves instead of 404ing
+    # every submit/status/results call. Only a non-default root proves this --
+    # the default-root assertion above would pass against a literal too.
     monkeypatch.setattr(config, "getApiRoot", lambda: "girder/api/v1")
     folderId = ObjectId()
     provider = config.buildProcessingConfigBlock({"_id": folderId})[
@@ -587,5 +575,4 @@ def test_reject_undeclared_output_folder_param(folderKey):
     ],
 )
 def test_accepts_well_formed_submissions(values):
-    # A compliant submission (the shapes the client actually sends) is untouched.
     assert submit._rejectReservedSubmitParams(values) is None

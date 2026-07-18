@@ -1,17 +1,11 @@
 """Launch / compose / config / save handlers for the ordinary VolView viewer.
 
-Restored from the plugin's pre-workspace ``main`` branch (Option A extraction):
-a compose-direct launch manifest (no snapshots / markers / receipts / workspace
-anchor) plus the ordinary ``session.volview.zip`` save routes. Housed here so
-``__init__.py`` stays route-wiring + ``load()``.
-
-Each launch gesture has one meaning (main parity): raw checked picks ALWAYS
-open fresh; a checked session item opens through to exactly that session; a
-filter gesture resumes its newest matching session; a bare folder-open resumes
-the folder's newest unfiltered session. A save returns a ``resumeUrl`` the
-client uses for subsequent reloads (F5); the save target itself stays
-launch-provided, so folder saves mint a new ``session.volview.zip`` item per
-save.
+Each launch gesture has one meaning: raw checked picks ALWAYS open fresh; a
+checked session item opens through to exactly that session; a filter gesture
+resumes its newest matching session; a bare folder-open resumes the folder's
+newest unfiltered session. A save returns a ``resumeUrl`` the client uses for
+subsequent reloads (F5); the save target itself stays launch-provided, so
+folder saves mint a new ``session.volview.zip`` item per save.
 """
 
 import copy
@@ -135,13 +129,13 @@ def uploadSession(model, parentId, user, size, metadata=None):
 def _saveResponse(sessionItemId):
     """The save response — a SINGLE field: the session's load URL.
 
-    The VolView client stays opaque to Girder ids. It never learns the item id,
+    The VolView client stays opaque to Girder ids: it never learns the item id,
     only the ``resumeUrl`` (``item/:id/volview``), which it repoints ONLY its
     reload (``urls=``) at. So a later F5 reloads exactly this save, while the
     save target (``save=``) stays launch-provided — a folder-scoped save mints
-    a new ``session.volview.zip`` item on every save, and F5 tracks the newest
-    via the repointed ``urls=``. Returns ``{}`` (no resumeUrl) when no session
-    item resolved — a fail-safe no-op the client ignores.
+    a new ``session.volview.zip`` item on every save. Returns ``{}`` (no
+    resumeUrl) when no session item resolved — a fail-safe no-op the client
+    ignores.
     """
     if sessionItemId is None:
         return {}
@@ -164,9 +158,9 @@ def saveToItem(self, itemId):
 
     fileDic = uploadSession(Item, itemId, self.getCurrentUser(), size)
     if "itemId" not in fileDic:
-        # Same finalization contract as the folder save: only a finalized File
-        # carries itemId. A partial/resumable upload must not report success --
-        # the client would show a clean save while F5 restores the previous zip.
+        # Only a finalized File carries itemId. A partial/resumable upload must
+        # not report success -- the client would show a clean save while F5
+        # restores the previous zip.
         raise RestException(
             "Session save must upload the whole zip in one request.", code=400
         )
@@ -206,11 +200,10 @@ def saveToFolder(self, folderId, metadata):
         )
     # Rebase this save's linkedResources onto the newest already-saved session in
     # the selection set: a save from a checked-session open would otherwise stamp
-    # linkedResources={items:[S]} instead of S's own lineage. This keeps the
-    # recorded selection truthful and — load-bearing for filter sessions — makes
-    # a save from a checked FILTER-session open inherit the filter link, so the
-    # filter row resumes this newest save and the bare folder-open correctly
-    # keeps excluding it.
+    # linkedResources={items:[S]} instead of S's own lineage. Load-bearing for
+    # filter sessions — a save from a checked FILTER-session open must inherit
+    # the filter link so the filter row resumes this newest save and the bare
+    # folder-open keeps excluding it.
     linkedResources = normalizeLinkedResources((metadata or {}).get("linkedResources"))
     selectedItems = loadModels(user, Item, linkedResources["items"])
     newestSelectedSession = findNewestSession(selectedItems)
@@ -293,18 +286,18 @@ def downloadResourceManifest(self, folder, folders, items, filters):
     # (bare scalar) is rejected here rather than 500ing in Mongo.
     if filters is not None and not isinstance(filters, (dict, list)):
         raise RestException("filters must be a JSON object or array of objects")
-    # An explicit folders/items selection wins over filters (main's precedence):
-    # a stale/bookmarked URL carrying both must load the checked resources, not
-    # silently substitute the filter set.
+    # An explicit folders/items selection wins over filters: a stale/bookmarked
+    # URL carrying both must load the checked resources, not silently
+    # substitute the filter set.
     if folders or items:
         selectedItems = loadModels(user, Item, items)
         checkedSession = findNewestSession(selectedItems)
         if checkedSession:
             # An explicitly checked session item opens through to EXACTLY that
-            # session (main's open-through) — the back-in-history gesture.
-            # Never re-match it to a newer sibling save. Filter-linked sessions
-            # get the same treatment: re-entering the filter row resumes the
-            # newest, but checking an old one opens exactly it.
+            # session — the back-in-history gesture. Never re-match it to a
+            # newer sibling save. Filter-linked sessions get the same treatment:
+            # re-entering the filter row resumes the newest, but checking an old
+            # one opens exactly it.
             files = singleVolViewZipOrImageFiles(
                 Item().fileList(checkedSession, subpath=False, data=False),
                 user=user,
@@ -313,11 +306,11 @@ def downloadResourceManifest(self, folder, folders, items, filters):
             )
             return filesToManifest(files, folder["_id"])
 
-        # Raw checked picks ALWAYS open fresh (main parity): checking images is
-        # the "start fresh" gesture, so no saved session is ever substituted.
-        # Resume happens only through the other gestures — bare folder-open
-        # (newest save), checking a session item (exactly that save), or
-        # re-entering a filter row (newest filter save).
+        # Raw checked picks ALWAYS open fresh: checking images is the "start
+        # fresh" gesture, so no saved session is ever substituted. Resume
+        # happens only through the other gestures — bare folder-open (newest
+        # save), checking a session item (exactly that save), or re-entering a
+        # filter row (newest filter save).
         selectedFolders = loadModels(user, Folder, folders)
         files = getFiles(Folder, selectedFolders) + getFiles(Item, selectedItems)
         files = [
@@ -499,9 +492,8 @@ def getFolderConfigFile(self, folder, name):
     baseConfig = copy.deepcopy(BASE_CONFIG)
     config = yamlConfigFile(folder, name, user, None) or {}
     config = _mergeDictionaries(baseConfig, config)
-    # Inject per-launch processing config dynamically (not in BASE_CONFIG —
-    # the providers list depends on the folder being launched). This is what
-    # lights up the Analysis tab.
+    # Injected dynamically rather than living in BASE_CONFIG: the providers list
+    # depends on the folder being launched.
     processing = buildProcessingConfigBlock(folder)
     _mergeDictionaries(config, {"processing": processing})
     return config

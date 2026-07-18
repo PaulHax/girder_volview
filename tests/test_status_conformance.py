@@ -1,12 +1,11 @@
 """Status-conformance for the neutral job-status projection.
 
-The canonical ``backend-contract`` job-state enum was reconciled TO the runtime
-names the backend already projects (``pending|running|success|error|cancelled``).
-This
-suite is the guard that keeps the backend's ``_projectJobStatus`` output and the
-generated ``neutral-job-status`` schema from silently drifting apart again: EVERY
-girder ``JobStatus`` the backend can observe must project to a state the generated
-schema accepts, and the whole projected payload must validate.
+The canonical ``backend-contract`` job-state enum carries the runtime names the
+backend projects (``pending|running|success|error|cancelled``). This suite guards
+the backend's ``_projectJobStatus`` output and the generated
+``neutral-job-status`` schema against silent drift: EVERY girder ``JobStatus``
+the backend can observe must project to a state the generated schema accepts,
+and the whole projected payload must validate.
 
 Pure-unit (no server fixture / Mongo): it drives the pure projector against
 hand-built job dicts and validates with the generated JSON Schema.
@@ -64,8 +63,6 @@ def test_projected_state_is_in_the_published_enum(name, status):
 
 
 def test_generated_enum_is_the_reconciled_runtime_names():
-    # The reconcile target: the canonical schema now carries the runtime names,
-    # NOT the pre-reconcile queued|succeeded|failed spellings.
     assert _published_states() == [
         "pending",
         "running",
@@ -76,8 +73,6 @@ def test_generated_enum_is_the_reconciled_runtime_names():
 
 
 def test_every_neutral_state_is_reachable_from_some_girder_status():
-    # The projection covers the full published enum (minus none): the five
-    # runtime names are exactly what the backend can emit.
     allowed = set(_published_states())
     emitted = {
         _projectJobStatus(_job(status))["state"] for _, status in _girder_statuses()

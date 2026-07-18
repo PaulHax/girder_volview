@@ -13,7 +13,6 @@ function setupButton(el, model) {
 
 wrap(ItemView, "render", function (render) {
     this.once("g:rendered", function () {
-        // check if item has loadable files
         const id = this.model.id;
         restRequest({
             url: `item/${id}/volview_loadable`,

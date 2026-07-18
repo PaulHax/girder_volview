@@ -8,10 +8,10 @@ can't be bypassed by guessing an id. Fail-closed: an unknown/absent category is
 excluded.
 
 The decorated REST handlers (``listTasks``/``getTaskSpec``/``runTask``) need a
-live request context, so — like ``test_volume_staging`` — these drive the
-underlying helpers the handlers call (``_scopedCliItems`` is the exact set
-``listTasks`` advertises; ``_findScopedCliItem`` returning ``None`` is what makes
-``getTaskSpec``/``runTask`` raise 404). No live Girder.
+live request context, so these drive the underlying helpers the handlers call
+(``_scopedCliItems`` is the exact set ``listTasks`` advertises;
+``_findScopedCliItem`` returning ``None`` is what makes ``getTaskSpec``/
+``runTask`` raise 404). No live Girder.
 """
 
 import types
@@ -108,8 +108,6 @@ def test_task_in_scope_is_fail_closed_and_case_insensitive():
 
 
 def test_cli_category_parsing():
-    # The category walk now comes from the single ``slicer_spec.parse_cli`` surface
-    # (the former ``_cliCategory`` was deleted).
     assert slicer_spec.parse_cli(_xml("Radiology"))["category"] == "Radiology"
     assert slicer_spec.parse_cli(_xml(" Filtering "))["category"] == "Filtering"
     assert slicer_spec.parse_cli(_xml())["category"] is None  # no <category>

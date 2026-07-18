@@ -2,7 +2,6 @@ import { APIRequestContext, BrowserContext, expect } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 import { readState } from './state';
 
-// Re-export the shared deployment config (see helpers/config.ts + README.md).
 export { CONFIG };
 
 export type Girder = { token: string; folderId: string; itemId: string; itemName: string };
@@ -78,10 +77,8 @@ export async function countSessionItems(request: APIRequestContext, g: Girder): 
 }
 
 // ---------------------------------------------------------------------------
-// Launch-URL construction — a faithful replica of the plugin launcher
-// (girder_volview/web_client/views/open.js). VolView is served at
-// /static/built/plugins/volview/index.html; the three legs (save/urls/config)
-// are all ordinary (no ?workspace=true, no volview_workspace/save).
+// Launch-URL construction — a replica of the plugin launcher
+// (girder_volview/web_client/views/open.js).
 // ---------------------------------------------------------------------------
 const VOLVIEW = 'static/built/plugins/volview/index.html';
 const enc = encodeURIComponent;

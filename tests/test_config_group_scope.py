@@ -1,14 +1,12 @@
 """Server-fixture coverage for group-scoped ``.volview_config.yaml`` merging.
 
 ``yamlConfigFile`` only calls ``adjustConfigForUser`` when the top-level config
-carries an ``access`` or ``groups`` key. The ``groups``-only case is the
-regression pinned here: the gate must recognize the plural ``groups`` key (the
-one ``adjustConfigForUser`` actually merges), and the raw ``groups`` mapping
-must never leak to the client -- for members it merges, for non-members it is
-simply stripped.
+carries an ``access`` or ``groups`` key. The gate must recognize the plural
+``groups`` key (the one ``adjustConfigForUser`` actually merges), and the raw
+``groups`` mapping must never leak to the client -- for members it merges, for
+non-members it is simply stripped.
 
-Needs a live pytest-girder Mongo; self-skips when unreachable so the offline
-gate stays green.
+Needs a live pytest-girder Mongo; self-skips when unreachable.
 """
 
 import io

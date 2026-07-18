@@ -1,10 +1,10 @@
-"""Server-fixture coverage for the D13 reverse cascade (folder delete -> job delete).
+"""Server-fixture coverage for the reverse cascade (folder delete -> job delete).
 
 Each job's private output folder nests inside the launch folder's single
 ``volview-jobs`` container, and the deletion cascade is bidirectional:
 
 * removing a job's output folder in the Girder hierarchy removes the job record
-  (which sweeps its staged inputs via the existing job-side cascade);
+  (which sweeps its staged inputs via the job-side cascade);
 * removing the whole container recurses per job folder — the ADMIN-gated
   "clear this dataset's job history" gesture;
 * a LIVE (non-terminal) job blocks the gesture: the REST route 409s BEFORE any
@@ -13,8 +13,8 @@ Each job's private output folder nests inside the launch folder's single
 * the job-side cascade (VolView's DELETE) still works — the in-progress marker
   stops the reverse handler from re-entering ``JobModel.remove`` mid-delete.
 
-Like the other route tests this needs a live pytest-girder server + Mongo; the
-module self-skips when the test Mongo is unreachable.
+Needs a live pytest-girder server + Mongo; the module self-skips when the test
+Mongo is unreachable.
 """
 
 import io
@@ -26,11 +26,6 @@ import pytest
 
 from girder_volview.backend import inputs, outputs, routes
 from girder_volview.utils import JOB_OUTPUT_FOLDER_META_KEY
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -69,7 +64,7 @@ def launchFolder(fsAssetstore, owner):
 
 
 # ---------------------------------------------------------------------------
-# Helpers (mirroring test_job_deletion_routes)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -185,13 +180,12 @@ def test_output_folders_nest_in_one_marked_container(server, owner, launchFolder
 
     container = _container(launchFolder)
     assert container is not None
-    # Both job folders share the single container.
     assert str(a["parentId"]) == str(container["_id"])
     assert str(b["parentId"]) == str(container["_id"])
-    # The container carries the manifest-exclusion marker (defense in depth)...
+    # The container carries the manifest-exclusion marker.
     assert container["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True
-    # ...and the per-job privacy properties are unchanged by the nesting: marked,
-    # non-public, ACL replaced with a submitter-only ADMIN list.
+    # Nesting leaves the per-job privacy properties intact: marked, non-public,
+    # ACL replaced with a submitter-only ADMIN list.
     for jobFolder in (a, b):
         assert jobFolder["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True
         assert jobFolder["public"] is False
@@ -225,8 +219,7 @@ def test_folder_delete_removes_job_and_staged_inputs(server, owner, launchFolder
 
 
 # ---------------------------------------------------------------------------
-# 3. Deleting the container clears every (terminal) job — and survives jobs
-#    whose folder was already gone
+# 3. Deleting the container clears every (terminal) job
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +239,6 @@ def test_container_delete_clears_all_jobs(server, owner, launchFolder):
     assert not _folderExists(folderB["_id"])
     assert not _jobExists(jobA["_id"])
     assert not _jobExists(jobB["_id"])
-    # The launch folder itself is untouched.
     assert _folderExists(launchFolder["_id"])
 
 
@@ -307,7 +299,6 @@ def test_live_job_folder_rest_delete_409s_before_cleaning(
         assert _jobExists(job["_id"])
         assert _itemExists(partial["_id"])
 
-    # Once the job settles, the same REST delete goes through and takes the job.
     from girder_jobs.models.job import Job
 
     Job().updateJob(_reload(job), status=JobStatus.SUCCESS)
@@ -336,7 +327,7 @@ def test_job_delete_still_cascades_folder_without_reentry(
 
     assert not _jobExists(job["_id"])
     assert not _folderExists(outputFolder["_id"])
-    # The guard set drained (no leaked in-progress markers).
+    # No leaked in-progress markers.
     assert outputs._CASCADING_FOLDER_IDS == set()
 
 # ---------------------------------------------------------------------------
@@ -362,8 +353,8 @@ def test_live_job_blocks_ancestor_folder_rest_delete(server, owner, launchFolder
     assert _folderExists(outputFolder["_id"])
     assert _itemExists(partial["_id"])
 
-    # Once the job settles, the ancestor delete goes through and takes the job
-    # with it (reverse cascade fires per nested job folder).
+    # Once settled, the ancestor delete fires the reverse cascade per nested
+    # job folder.
     Job().updateJob(_reload(job), status=JobStatus.SUCCESS)
     resp = _restDeleteFolder(server, launchFolder["_id"], owner)
     assert resp.output_status.startswith(b"200")
@@ -448,7 +439,6 @@ def test_unmarked_user_folder_named_volview_jobs_is_not_adopted(
         routes._createJobOutputFolder(launchFolder, owner, uuid.uuid4().hex)
     assert excinfo.value.code == 409
 
-    # The user's folder is untouched: no adoption marker, contents intact.
     reloaded = Folder().load(userFolder["_id"], force=True)
     assert not (reloaded.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
     assert _itemExists(keepsake["_id"])
@@ -500,7 +490,6 @@ def test_container_create_race_does_not_adopt(server, owner, launchFolder, monke
     assert excinfo.value.code == 409
     assert blinded["done"]
 
-    # The user's folder is untouched: no adoption marker, contents intact.
     reloaded = Folder().load(userFolder["_id"], force=True)
     assert not (reloaded.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
     assert _itemExists(keepsake["_id"])

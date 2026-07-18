@@ -3,12 +3,9 @@ import { CONFIG, apiUrl } from './config';
 import { makeNrrd } from './nrrd';
 import { E2eState } from './state';
 
-// ---------------------------------------------------------------------------
-// Data provisioning over the girder REST API (Playwright's APIRequestContext).
-// Called from the global setup: authenticate, create a fresh public folder, and
-// upload two synthetic NRRD images so the gestures have loadable, distinct picks
-// — no operator-created fixtures required.
-// ---------------------------------------------------------------------------
+// Data provisioning over the girder REST API: authenticate, create a fresh
+// public folder, and upload two synthetic NRRD images, so the gestures have
+// loadable distinct picks without operator-created fixtures.
 
 async function readJson(res: import('@playwright/test').APIResponse, ctx: string): Promise<any> {
   const status = res.status();
@@ -103,7 +100,6 @@ async function uploadFile(
 export async function provision(request: APIRequestContext): Promise<E2eState> {
   const { token, userId } = await authenticate(request);
 
-  // Provision a fresh folder + two distinct synthetic NRRD images.
   const folderId = await createFolder(request, token, userId);
   const a = await uploadFile(request, token, folderId, 'synthetic-a.nrrd', makeNrrd({ variant: 0 }));
   const b = await uploadFile(request, token, folderId, 'synthetic-b.nrrd', makeNrrd({ variant: 1 }));

@@ -1,14 +1,10 @@
 """Processing backend -- REST routes + job creation + route registration.
 
-This module owns the wire surface: the ``@boundHandler`` route functions, the
-single live slicer_cli_web job-creation touch point (``_genDockerJob``), and
-``addBackendRoutes`` (event bindings + route table).
-
 Cross-module helper calls are MODULE-QUALIFIED on purpose (``submit._foo`` /
 ``inputs._foo`` / ``outputs._foo`` / ``results._foo``) so a test that patches a
-helper on its DEFINING module reaches the call site here (the monkeypatch-target
-contract) — a bare ``from .submit import _foo`` would bind a name that a
-later ``setattr(submit, "_foo", ...)`` could not reach.
+helper on its DEFINING module reaches the call site here; a bare
+``from .submit import _foo`` binds a name ``setattr(submit, "_foo", ...)``
+cannot reach.
 """
 
 import base64
@@ -58,12 +54,10 @@ def listTasks(self, folder):
 
 
 # Explicit short lifetime for the CLI-container token. Without ``days`` Girder
-# applies ``core.cookie_lifetime`` (180 days by default), leaving a broad data-plane
-# credential valid for months after the job ends. One day is long enough to cover
-# queue wait + run time and short enough to bound credential exposure if the token
-# leaks (a compromised image, broker, or command-line capture). Full per-job
-# lifecycle revocation (persist + revoke on every terminal/rollback path) is
-# deliberately deferred; this TTL is the immediate bound.
+# applies ``core.cookie_lifetime`` (180 days by default), leaving a broad
+# data-plane credential valid for months after the job ends. One day covers queue
+# wait + run time and bounds exposure if the token leaks (a compromised image,
+# broker, or command-line capture).
 _CONTAINER_TOKEN_TTL_DAYS = 1.0
 
 JOB_HISTORY_PAGE_DEFAULT = 25
@@ -77,11 +71,10 @@ _SUBMITTED_PARAMETERS_FIELD = "volviewSubmittedParameters"
 def ensureJobHistoryIndexes(jobModel=None):
     """Install the indexes the history list and output-correlation queries need.
 
-    Two indexes back the job-addressed query paths: a compound index for the
-    personal newest-first history page, and a point-lookup index on the private
-    output-folder id -- ``outputs._jobForOutputFolder`` runs a ``findOne`` on it
-    for EVERY finalized output upload, so without the index each correlation is a
-    full jobs-collection scan that worsens as history grows.
+    A compound index backs the personal newest-first history page. A point-lookup
+    index on the private output-folder id backs ``outputs._jobForOutputFolder``,
+    which runs a ``findOne`` for EVERY finalized output upload -- without it each
+    correlation is a full jobs-collection scan that worsens as history grows.
     """
     if jobModel is None:
         from girder_jobs.models.job import Job as JobModel
@@ -180,10 +173,9 @@ def listJobHistory(self, folder, limit=JOB_HISTORY_PAGE_DEFAULT, cursor=None):
         level=AccessType.READ,
         sort=[("created", SortDir.DESCENDING), ("_id", SortDir.DESCENDING)],
         limit=pageSize + 1,
-        # Exclude the (unbounded, multi-MB on chatty/failed CLIs) log from every
-        # page: the summary projection never reads it, so materializing it per job
-        # is pure cost. Mirrors JobModel.load(includeLog=False)'s {'log': False}
-        # exclusion projection.
+        # The summary projection never reads the log, which is unbounded (multi-MB
+        # on chatty/failed CLIs), so exclude it from every page. Mirrors
+        # JobModel.load(includeLog=False)'s {'log': False} projection.
         fields={"log": False},
     )
     page = list(found)
@@ -209,9 +201,8 @@ def listJobHistory(self, folder, limit=JOB_HISTORY_PAGE_DEFAULT, cursor=None):
     .param("taskId", "The task identifier.", paramType="path")
 )
 def getTaskSpec(self, folder, taskId):
-    # The backend translates the Slicer XML into VolView's own task spec
-    # server-side, so the client never parses backend XML. Scope guards: an
-    # out-of-scope / unknown / slicer_cli_web-missing taskId 404s.
+    # The Slicer XML is translated into VolView's task spec server-side, so the
+    # client never parses backend XML.
     user = self.getCurrentUser()
     if not submit._slicerCliAvailable():
         raise RestException("slicer_cli_web is not installed", code=404)
@@ -220,18 +211,18 @@ def getTaskSpec(self, folder, taskId):
         raise RestException("Unknown taskId", code=404)
     # translate_slicer_xml needs the strict <executable> parse (title/description
     # + ordered params), which ``parse_cli`` does not carry, so it parses the XML
-    # itself; the scoped parse is consumed by runTask, not here.
+    # itself; the scoped parse is consumed by runTask.
     cliItem, _parsedCli = scoped
     return translate_slicer_xml(cliItem.xml, cliItem.name)
 
 
-# The single server-owned container every per-job output folder nests inside
-# (D13). One hierarchy entry per launch folder no matter how many jobs
-# accumulate, and one ADMIN-gated "clear this dataset's job history" gesture
-# (removing it recurses through the per-job folders, firing the reverse
-# cascade per job). The name is reserved: a pre-existing USER folder with this
-# name is never adopted -- reuse is gated on the server-owned marker, and an
-# unmarked name collision refuses the submission (409) instead.
+# The single server-owned container every per-job output folder nests inside: one
+# hierarchy entry per launch folder no matter how many jobs accumulate, and one
+# ADMIN-gated "clear this dataset's job history" gesture (removing it recurses
+# through the per-job folders, firing the reverse cascade per job). The name is
+# reserved: a pre-existing USER folder with this name is never adopted -- reuse is
+# gated on the server-owned marker, and an unmarked name collision refuses the
+# submission (409) instead.
 JOBS_CONTAINER_NAME = "volview-jobs"
 
 
@@ -240,18 +231,15 @@ def _jobsContainerFolder(launchFolder, user):
 
     Reuse requires the ``volviewJobOutputFolder`` marker -- the server-owned
     identity stamped at creation. Adopting a user's pre-existing folder that
-    merely shares the reserved name would silently hide its contents from
-    launch manifests and turn the container-delete gesture into "delete
-    unrelated user data", so an unmarked collision refuses the submission with
-    a clear 409 instead. The marker is stamped ONLY on a folder this call
-    itself created: ``createFolder`` never reuses (name-collision raises
-    ``ValidationException``), so a folder someone else made in the
-    check-create window re-runs the marker check instead of being adopted.
-    The marker also drives manifest exclusion (defense in depth -- the
-    container holds no files directly and owns no job, so the reverse-cascade
-    handler no-ops on it). Its ACL is the launch folder's (copied by
-    ``createFolder``): collaborators may see the container, but each per-job
-    folder inside keeps its submitter-only ACL.
+    merely shares the reserved name would silently hide its contents from launch
+    manifests and turn the container-delete gesture into "delete unrelated user
+    data", so an unmarked collision refuses the submission with a clear 409. The
+    marker is stamped ONLY on a folder this call itself created: ``createFolder``
+    never reuses (name-collision raises ``ValidationException``), so a folder
+    someone else made in the check-create window re-runs the marker check instead
+    of being adopted. Its ACL is the launch folder's (copied by ``createFolder``):
+    collaborators may see the container, but each per-job folder inside keeps its
+    submitter-only ACL.
     """
 
     def existingContainer():
@@ -298,7 +286,7 @@ def _jobsContainerFolder(launchFolder, user):
 def _createJobOutputFolder(launchFolder, user, submissionId):
     """Create the job's private, server-owned output folder for a submission.
 
-    Lives inside the launch folder's ``volview-jobs`` container (D13). Every
+    Lives inside the launch folder's ``volview-jobs`` container. Every
     declared output is forced into this folder, and it is the SOLE
     output-correlation + ownership key. Two steps make it private:
 
@@ -374,13 +362,11 @@ def _genDockerJob(cliItem, params, user, initialJobFields):
     from slicer_cli_web.rest_slicer_cli import genHandlerToRunDockerCLI
 
     # Scope-limit the container token to the data plane the CLI actually needs:
-    # read its inputs, write its outputs. Narrower than
-    # the ecosystem norm (slicer_cli_web mints full-auth tokens) without weakening
-    # Girder ACLs — the submitter's own read/write reach still bounds it. The token
-    # is passed to the CLI so it can read inputs and write outputs; it is NOT
-    # persisted on the job or used as an ownership/correlation key (outputs bind by
-    # their private parent folder, never by a token). It carries an explicit short
-    # TTL so it cannot outlive the job by months if it leaks.
+    # read its inputs, write its outputs. Narrower than the ecosystem norm
+    # (slicer_cli_web mints full-auth tokens) without weakening Girder ACLs — the
+    # submitter's own read/write reach still bounds it. It is NOT persisted on the
+    # job or used as an ownership/correlation key (outputs bind by their private
+    # parent folder, never by a token).
     token = Token().createToken(
         user=user,
         scope=[TokenScope.DATA_READ, TokenScope.DATA_WRITE],
@@ -388,23 +374,19 @@ def _genDockerJob(cliItem, params, user, initialJobFields):
     )
     requestItem = _requestCliItem(cliItem, initialJobFields)
     handler = genHandlerToRunDockerCLI(requestItem)
-    # Inject the CLI's `girderApiUrl`/`girderToken` params so slicer_cli_web feeds
-    # the container its API URL + token (the b3 convention). slicer_cli_web only
-    # substitutes its GirderApiUrl()/GirderToken() runtime transforms when these
-    # keys are present in the params it processes (prepare_task
-    # `_add_optional_input_param` skips a param absent from args); the REST route
-    # would default them in, but the backend calls `subHandler` directly, so we
-    # supply them here. Empty -> slicer_cli_web substitutes the transforms, and
-    # GirderToken resolves to THIS scoped token, not a broader one. Without
-    # them a CLI that fetches its own inputs by id (`reference="_girder_id_"`, e.g.
-    # a multi-file DICOM series) has no way to reach Girder. Harmless for a CLI
-    # that declares neither -- slicer_cli_web ignores undeclared args.
+    # slicer_cli_web only substitutes its GirderApiUrl()/GirderToken() runtime
+    # transforms when these keys are present in the params it processes
+    # (prepare_task `_add_optional_input_param` skips a param absent from args).
+    # The REST route defaults them in, but this backend calls `subHandler`
+    # directly. Empty -> the transforms substitute, and GirderToken resolves to
+    # THIS scoped token, not a broader one. Without them a CLI that fetches its own
+    # inputs by id (`reference="_girder_id_"`, e.g. a multi-file DICOM series) has
+    # no way to reach Girder. Harmless for a CLI that declares neither --
+    # slicer_cli_web ignores undeclared args.
     params = dict(params)
     params.setdefault("girderApiUrl", "")
     params.setdefault("girderToken", "")
-    # Take a copy so the handler can mutate freely. Output correlation no longer
-    # depends on intercepting per-hook upload tokens: each output binds to the job
-    # by its private parent folder, so there is no token capture around this call.
+    # Take a copy so the handler can mutate freely.
     job_obj = handler.subHandler(requestItem, copy.deepcopy(params), user, token)
     job = job_obj.job if hasattr(job_obj, "job") else job_obj
     return job
@@ -417,8 +399,7 @@ def _prepareSubmissionFields(
 
     Includes the job's private output-folder id (``_OUTPUT_FOLDER_ID_FIELD``) —
     the sole output-correlation + ownership key — so the folder id is part of the
-    FIRST job insert, queryable before any worker upload can race in. The former
-    per-hook upload-token list is gone (folder ownership replaces it).
+    FIRST job insert, queryable before any worker upload can race in.
 
     ``outputSpecs`` is the ``slicer_spec.parse_cli`` output descriptor list
     ``runTask`` already parsed, threaded in rather than re-parsed here.
@@ -460,13 +441,10 @@ def runTask(self, folder, taskId, body):
     user = self.getCurrentUser()
     values = (body or {}).get("values", {}) if isinstance(body, dict) else {}
     if not isinstance(values, dict):
-        # Wire envelope: values is an object of parameter values; any other JSON
-        # shape is a malformed submission, not a job.
         raise RestException("values must be an object of parameter values", code=400)
 
-    # Submit-boundary input validation: reject a crafted payload that carries
-    # reserved credentials or an undeclared output-folder param. Runs
-    # before any task lookup or work.
+    # Reject a payload carrying reserved credentials or an undeclared
+    # output-folder param before any task lookup or work.
     submit._rejectReservedSubmitParams(values)
 
     if not submit._slicerCliAvailable():
@@ -477,57 +455,50 @@ def runTask(self, folder, taskId, body):
         raise RestException("Unknown taskId", code=404)
     cliItem, parsedCli = scoped
 
-    # The whole submission parses the CLI XML exactly twice: ``_findScopedCliItem``
-    # already ran ``parse_cli`` (category + output-descriptor + param walk) and we
-    # reuse its ``outputs`` here; ``declared_params`` is the one remaining parse
-    # (the label-independent key/value declaration the grouped walk can't supply).
-    # Every downstream guard/translate step reads these threaded structures.
+    # The submission parses the CLI XML exactly twice: ``_findScopedCliItem``
+    # already ran ``parse_cli``, whose ``outputs`` are reused here, and
+    # ``declared_params`` supplies the label-independent key/value declaration the
+    # grouped walk can't. Downstream guard/translate steps read these structures.
     declared = declared_params(cliItem.xml)
     outputSpecs = parsedCli["outputs"]
 
-    # Submit-boundary schema guard: reject any key the task's CLI does not declare
-    # as a parameter (a typo, a probe, or a client-authored output structure under
-    # an unknown name) with a 400 rather than silently ignoring it or 500-ing
-    # downstream. Screens the RAW client keys before autofill adds server-owned
-    # output structures. Then validate each declared key's VALUE against the
-    # CLI declaration (type / constraints range / enum membership) so a garbage
+    # Screens the RAW client keys, so it must run before autofill adds
+    # server-owned output structures. An undeclared key or an out-of-declaration
     # value is a boundary 400 naming the parameter, not a later job failure.
     submit._rejectUndeclaredSubmitParams(values, declared)
     submit._validateDeclaredSubmitValues(values, declared)
 
     # Auto-generate a deterministic output filename for any output param the user
-    # didn't fill (input file + CLI name + parameter name + extension). No longer
-    # uniquified via a folder scan: outputs bind to the job by its private output
-    # folder, not by name, so a duplicate filename can never cross results.
+    # didn't fill (input file + CLI name + parameter name + extension). Names need
+    # not be unique: outputs bind to the job by its private output folder, not by
+    # name, so a duplicate filename can never cross results.
     values = submit._autofillOutputs(dict(values), outputSpecs, cliItem.name)
 
-    # Mint the server submission id and create the job's PRIVATE output folder
-    # BEFORE translating params or publishing the task: every declared output is
-    # forced into that folder, and its id is part of the first job insert so it is
-    # queryable before any worker upload can race in.
+    # The output folder is created BEFORE translating params or publishing the
+    # task: every declared output is forced into it, and its id is part of the
+    # first job insert so it is queryable before any worker upload can race in.
     submissionId = uuid.uuid4().hex
     outputFolder = _createJobOutputFolder(folder, user, submissionId)
 
     transientItemIds = []
     try:
-        # Resolve each bound input once (own-scheme validation + per-user ACL
-        # re-check), forcing every declared output into the private output folder
-        # and rejecting a client-supplied folderRef. Reuse the authorized file
-        # documents for transient-item detection so each URI's ACL check runs once.
+        # Resolves each bound input once (own-scheme validation + per-user ACL
+        # re-check), forces every declared output into the private output folder,
+        # and rejects a client-supplied folderRef. The authorized file documents
+        # are reused for transient detection so each URI's ACL check runs once.
         params, resolvedInputFiles = submit._translateValuesToSlicerParams(
             values, user, outputFolder, declared
         )
-        # Per-job input ownership: any staged (transient) input is COPIED into
-        # the job's private folder and the CLI params are rewritten onto the
-        # copies. The copies are recorded on the job so
-        # inputs._cleanupTransientOnJobDone deletes them at terminal state;
-        # the shared staged original is never a job dependency.
+        # Per-job input ownership: any staged (transient) input is COPIED into the
+        # job's private folder and the CLI params are rewritten onto the copies.
+        # The copies are recorded on the job so
+        # inputs._cleanupTransientOnJobDone deletes them at terminal state; the
+        # shared staged original is never a job dependency.
         params, transientItemIds = inputs.copyStagedInputsIntoJobFolder(
             params, resolvedInputFiles, user, outputFolder
         )
-        # INFO carries only routing identity; the fully-translated CLI params
-        # (which can hold sensitive string values) stay at debug so a busy
-        # deployment's INFO log never accumulates per-job payloads.
+        # INFO carries only routing identity; the translated CLI params can hold
+        # sensitive string values, so they stay at debug.
         logger.info(
             "[volview_processing] runTask folder=%s task=%s submission=%s",
             folder["_id"],
@@ -572,12 +543,11 @@ def runTask(self, folder, taskId, body):
 
 
 # ---------------------------------------------------------------------------
-# Job-addressed routes — status / results / cancel are keyed by job id
-# alone and gated by the job's OWN ACL. The launch folder is not part of a job's
-# identity, so these carry no ``folderId`` (they live on the folder-free
-# ``volview_processing`` resource below, not the folder tree the launch-context
-# routes use). getJob / getJobResults are READ-gated; cancel is WRITE-gated so a
-# read-only viewer who can see a job's status cannot cancel it.
+# Job-addressed routes — keyed by job id alone and gated by the job's OWN ACL.
+# The launch folder is not part of a job's identity, so these carry no
+# ``folderId``; they live on the folder-free ``volview_processing`` resource
+# below. getJob / getJobResults are READ-gated; cancel and delete are WRITE-gated
+# so a read-only viewer who can see a job's status cannot cancel or delete it.
 # ---------------------------------------------------------------------------
 
 
@@ -585,12 +555,11 @@ def _loadJobForStatusProjection(jobId, user):
     """Load a job for status projection, WITHOUT its log unless it is needed.
 
     The client polls status every ~2s per live job and the job log grows
-    unbounded, so the common load excludes the log at the Mongo projection
-    level (``includeLog`` defaults False). Only the terminal-error projection
-    reads the log (a bounded tail in ``results._projectJobStatus``), and the
-    poller stops at terminal — so the log is reloaded at most for the final
-    error observation, never on the steady-state poll. The on-demand detail
-    route stays the full-log path.
+    unbounded, so the common load excludes it at the Mongo projection level
+    (``includeLog`` defaults False). Only the terminal-error projection reads it
+    (a bounded tail in ``results._projectJobStatus``), and the poller stops at
+    terminal, so the log is reloaded at most once per job. The detail route is
+    the full-log path.
     """
     from girder_jobs.models.job import Job as JobModel
 
@@ -671,15 +640,15 @@ def deleteJob(self, jobId):
 
     model = JobModel()
     job = model.load(jobId, user=user, level=AccessType.WRITE, exc=True)
-    # Product-specific 409 for a nonterminal job. The model.job.remove handler
-    # ALSO enforces this (protecting other JobModel.remove callers), but the
-    # route returns the typed product response rather than the model's raise.
+    # The model.job.remove handler ALSO enforces this (protecting other
+    # JobModel.remove callers); the route returns the typed product response
+    # rather than the model's raise.
     if not results.isTerminalStatus(job.get("status")):
         raise RestException(
             "Job is still running; cancel it before deleting", code=409
         )
     # The ownership cascade (owned output folder + staged inputs) lives in the
-    # model.job.remove handler; this route adds no second cascade.
+    # model.job.remove handler; this route must not add a second cascade.
     model.remove(job)
     cherrypy.response.status = 204
     return None
@@ -721,7 +690,6 @@ def getJobResults(self, jobId):
     .errorResponse("Write access was denied for the job.", 403)
 )
 def cancelJob(self, jobId):
-    # WRITE-gated load: a read-only user (who can GET the status) is blocked here.
     user = self.getCurrentUser()
     from girder_jobs.models.job import Job as JobModel
 
@@ -730,13 +698,11 @@ def cancelJob(self, jobId):
     try:
         jobModel.cancelJob(job)
     except ValidationException:
-        # Best-effort: Girder refuses a CANCELED transition from a terminal state,
-        # so an already-finished job simply cannot be cancelled. That is not an
-        # error here -- we fall through and report the job's real state below
-        # rather than fabricate a `cancelled` the poller would contradict.
+        # Girder refuses a CANCELED transition from a terminal state, so an
+        # already-finished job cannot be cancelled. Fall through and report the
+        # job's real state rather than fabricate a `cancelled` the poller would
+        # contradict.
         pass
-    # Reload fresh and project the ACTUAL persisted state (best-effort): the
-    # client's poller converges on whatever Girder holds.
     fresh = _loadJobForStatusProjection(jobId, user)
     return results._projectJobStatus(fresh, user)
 
@@ -779,20 +745,18 @@ def stageInput(self, folder, file, descriptor):
     if "format" in referenceImage and not isinstance(referenceImage["format"], str):
         raise RestException("Malformed staged reference image format", code=400)
     # Validate the reference image before writing bytes so a malformed, foreign,
-    # unauthorized, or transient reference never leaves an orphan upload (own-scheme
-    # + per-user ACL re-check; no lineage is tracked).
+    # unauthorized, or transient reference never leaves an orphan upload.
     inputs.validateStagedReferenceImage(referenceImage, user)
-    # Age out any never-submitted orphans in this folder before adding another
-    # (job-end cleanup never sees an upload that was never submitted).
+    # Job-end cleanup never sees an upload that was never submitted, so age out
+    # this folder's orphans before adding another.
     inputs._sweepOrphanTransients(folder)
     fileDoc = inputs._streamMultipartFileIntoItem(folder, user, file, name)
     try:
         inputs._tagItemTransient(fileDoc, user)
     except Exception:
         # An untagged item is invisible to both the TTL sweep and the
-        # launch-manifest exclusion (each keys on the transient marker), so a
-        # tagging failure must not leave the just-finalized upload behind as
-        # apparent durable launch data.
+        # launch-manifest exclusion (each keys on the transient marker), so it
+        # would linger as apparent durable launch data.
         inputs._removeTransientItems([fileDoc["itemId"]])
         raise
     # The backend mints the staged URI; the client constructs none.
@@ -810,8 +774,8 @@ class _JobResource(Resource):
     Mounted at ``/volview_processing`` (a sibling of ``/folder``, ``/item``),
     this hosts status / results / cancel keyed by job id alone -- the launch
     folder is not part of a job's identity. The launch-context routes
-    (tasks / spec / run / stage) stay on the folder tree because they genuinely
-    operate per-folder. The handlers are the same module-level ``@boundHandler``
+    (tasks / spec / run / stage) stay on the folder tree because they operate
+    per-folder. The handlers are the same module-level ``@boundHandler``
     functions; only their mount point differs.
     """
 
@@ -828,38 +792,37 @@ class _JobResource(Resource):
 def addBackendRoutes(info):
     ensureJobHistoryIndexes()
     # Delete a job's transient staged inputs once it reaches a terminal state.
-    # Bound once at plugin load; fires for every job update but no-ops
-    # cheaply unless the job carries the transient marker.
+    # Fires for every job update but no-ops cheaply unless the job carries the
+    # transient marker.
     events.bind(
         "jobs.job.update.after",
         "girder_volview.backend.routes",
         inputs._cleanupTransientOnJobDone,
     )
-    # Folder-owned job outputs: synchronously record each finalized output file's
-    # id onto the job that OWNS the file's private parent folder, keyed by output
-    # identifier, so result collection reads ids OFF the job. Fires for every
-    # upload but returns early unless the upload lands in a job's output folder
-    # under a declared identifier (fail closed).
+    # Record each finalized output file's id onto the job that OWNS the file's
+    # private parent folder, keyed by output identifier, so result collection
+    # reads ids OFF the job. Fires for every upload but returns early unless the
+    # upload lands in a job's output folder under a declared identifier.
     events.bind(
         "model.file.finalizeUpload.after",
         "girder_volview.backend.outputs",
         outputs._recordJobOutput,
     )
     # Ownership cascade: each job owns one private output folder + its staged
-    # inputs. This handler (model.job.remove, before the DB delete) refuses to
-    # remove a nonterminal owned job and cascade-deletes its owned resources — so
-    # our DELETE route, Girder's built-in job route, and any direct
-    # JobModel.remove caller all honor the same terminal guard and cleanup.
+    # inputs. Running before the DB delete, this refuses to remove a nonterminal
+    # owned job and cascade-deletes its owned resources, so the DELETE route,
+    # Girder's built-in job route, and any direct JobModel.remove caller all
+    # honor the same terminal guard and cleanup.
     events.bind(
         "model.job.remove",
         "girder_volview.backend.outputs",
         outputs._cascadeDeleteJobOwnedResources,
     )
-    # Reverse ownership cascade (D13): deleting a job's output folder in the
-    # Girder hierarchy deletes the job record too (refusing for a live job),
-    # so folder deletion is a first-class "delete this job" gesture and no
-    # orphaned job rows accumulate. Removing the volview-jobs container
-    # recurses per job folder.
+    # Reverse ownership cascade: deleting a job's output folder in the Girder
+    # hierarchy deletes the job record too (refusing for a live job), so folder
+    # deletion is a first-class "delete this job" gesture and no orphaned job
+    # rows accumulate. Removing the volview-jobs container recurses per job
+    # folder.
     events.bind(
         "model.folder.remove",
         "girder_volview.backend.outputs",
@@ -901,9 +864,8 @@ def addBackendRoutes(info):
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "tasks"), listTasks
     )
-    # Reloaded-client job re-discovery: context-scoped like
-    # listTasks/runTask/stage (it takes a launch folder), NOT job-addressed like
-    # status/results/cancel. A reloaded client GETs this to re-find its jobs.
+    # Job re-discovery is context-scoped (it takes a launch folder), not
+    # job-addressed: a reloaded client GETs this to re-find its jobs.
     info["apiRoot"].folder.route(
         "GET", (":folderId", "volview_processing", "jobs"), listJobHistory
     )
@@ -920,8 +882,4 @@ def addBackendRoutes(info):
         (":folderId", "volview_processing", "tasks", ":taskId", "run"),
         runTask,
     )
-    # Job-addressed routes live on a dedicated folder-free resource: a job's
-    # status/results/cancel are keyed by job id alone (gated by the job's own
-    # ACL), so they must NOT hang off the folder tree. Greenfield -- no
-    # folder-scoped compat shim for the old shape.
     info["apiRoot"].volview_processing = _JobResource()

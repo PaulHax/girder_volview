@@ -1,29 +1,11 @@
 """Server-fixture coverage for the ownership-boundary deletion cascade.
 
-A backend job OWNS exactly one server-created private output folder (plus any
-staged input items). That ownership is also the deletion boundary, enforced by a
-``model.job.remove`` handler that fires BEFORE the DB delete: it REFUSES to remove
-a non-terminal owned job (so no caller can orphan a running job's private
-resources) and otherwise cascade-deletes the owned output folder and any remaining
-staged inputs. Because Girder wraps ``model.*.remove`` handlers in no try/except,
-raising there aborts the delete and RETAINS the job as the discoverable owner of
-whatever is left -- so a partial failure is retryable.
+Drives the ``model.job.remove`` handler described in ``backend/outputs.py``: a
+non-terminal owned job is refused, a terminal one cascades to its output folder
+and staged inputs, and a raising cascade aborts the delete so the job is retained
+and the delete stays retryable.
 
-Proven here (needs a live pytest-girder Mongo; self-skips when unreachable so the
-offline gate stays green, and must pass wherever Mongo is present):
-
-9.  A pending/running owned job's DELETE returns 409; the job + owned folder stay.
-10. A terminal owned job's DELETE returns 204; the output folder + staged inputs +
-    the job are all gone.
-11. A partial deletion failure (the owned-folder removal raises once) surfaces an
-    error and RETAINS the job; a retry completes the cascade.
-12. A READ-only (no WRITE) user cannot DELETE (403); nothing is removed.
-13. Girder's own core job removal path (a direct ``JobModel().remove``) against a
-    non-terminal owned job is ALSO blocked and the owned folder ALSO survives --
-    the guard protects non-plugin callers, not just this DELETE route.
-
-Like the other route tests this needs a live pytest-girder server + Mongo; the
-module self-skips when the test Mongo is unreachable.
+Needs a live pytest-girder Mongo; the module self-skips when it is unreachable.
 """
 
 import io
@@ -33,11 +15,6 @@ import uuid
 import pytest
 
 from girder_volview.backend import inputs, outputs, routes
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -198,11 +175,6 @@ def _itemExists(itemId):
     return Item().load(itemId, force=True, exc=False) is not None
 
 
-# ---------------------------------------------------------------------------
-# 9. A pending/running owned job's DELETE returns 409; ownership is retained
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_nonterminal_delete_409s_and_retains_ownership(server, owner, launchFolder):
     from girder_jobs.constants import JobStatus
@@ -212,14 +184,8 @@ def test_nonterminal_delete_409s_and_retains_ownership(server, owner, launchFold
         job, outputFolder = _makeOwnedJob(owner, launchFolder, status=status)
         resp = _delete(server, job["_id"], owner)
         assert resp.output_status.startswith(b"409")
-        # Ownership state retained: neither the job nor its owned folder is removed.
         assert _jobExists(job["_id"])
         assert _folderExists(outputFolder["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 10. A terminal owned job's DELETE returns 204; folder + staged inputs + job gone
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -234,16 +200,9 @@ def test_terminal_delete_cascades_folder_inputs_and_job(server, owner, launchFol
     resp = _delete(server, job["_id"], owner)
     assert resp.output_status.startswith(b"204")
 
-    # Deleting the job deleted its results: the owned output folder, the staged
-    # input item, and the job record are all gone.
     assert not _folderExists(outputFolder["_id"])
     assert not _itemExists(stagedItemId)
     assert not _jobExists(job["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 11. A partial deletion failure RETAINS the job; a retry completes the cascade
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -266,25 +225,17 @@ def test_partial_deletion_failure_retains_job_then_retry_completes(
 
     monkeypatch.setattr(Folder, "remove", flaky_remove)
 
-    # First DELETE: the owned-folder removal fails, the cascade raises, the model
-    # never reaches the DB delete -- the job is RETAINED (still the discoverable
-    # owner) and the API surfaces an error, never a false 204.
+    # The cascade raises, so the model never reaches the DB delete: the job is
+    # RETAINED as the discoverable owner and the API errors, never a false 204.
     first = _delete(server, job["_id"], owner)
     assert first.output_status.startswith(b"500")
     assert _jobExists(job["_id"])
     assert _folderExists(outputFolder["_id"])
 
-    # A retry completes the cascade: the folder removal now succeeds, the job is
-    # removed, and the DELETE returns 204.
     second = _delete(server, job["_id"], owner)
     assert second.output_status.startswith(b"204")
     assert not _jobExists(job["_id"])
     assert not _folderExists(outputFolder["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 12. A READ-only (no WRITE) user cannot DELETE (403); nothing is removed
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -299,24 +250,18 @@ def test_read_only_user_cannot_delete(server, owner, stranger, launchFolder):
     resp = _delete(server, job["_id"], stranger)
     assert resp.output_status.startswith(b"403")
 
-    # Untouched: the WRITE-gated load blocks the read-only viewer before any cascade.
+    # The WRITE-gated load blocks the read-only viewer before any cascade runs.
     assert _jobExists(job["_id"])
     assert _folderExists(outputFolder["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 13. Girder's own core removal path is ALSO guarded (non-plugin callers)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
 def test_core_job_remove_of_nonterminal_owned_job_is_blocked(
     server, owner, launchFolder
 ):
-    # The model.job.remove guard protects non-plugin callers too: a direct
-    # JobModel().remove (what Girder's own core /job/:id DELETE ultimately calls)
-    # against a non-terminal OWNED job is ALSO blocked, and the owned folder
-    # survives -- the guard is not confined to this plugin's DELETE route.
+    # The model.job.remove guard is not confined to this plugin's DELETE route: a
+    # direct JobModel().remove (what Girder's core /job/:id DELETE ultimately
+    # calls) against a non-terminal OWNED job is blocked too.
     from girder.exceptions import RestException
     from girder_jobs.constants import JobStatus
     from girder_jobs.models.job import Job

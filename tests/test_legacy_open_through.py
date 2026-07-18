@@ -6,8 +6,8 @@ live cherrypy pipeline:
 - **bare folder-open** resumes the folder's newest ``session.volview.zip`` as
   the byte-identical legacy ``{resources}`` manifest; with no zip it opens the
   folder's raw loadable images instead;
-- **explicit zip open (item route):** a ``session.volview.zip`` item keeps
-  opening as its resources list (restore) -- the image half of the same rung;
+- **explicit zip open (item route):** a ``session.volview.zip`` item opens as
+  its resources list (restore);
 - **empty gesture** (no zip, no loadable images) fails closed at the route;
 - **merely opening writes NOTHING:** GETs of both manifest routes mutate no
   folder/item/file doc (the read paths are read-only).
@@ -37,10 +37,6 @@ def _uploadFile(folder, user, name, data=b"pixels"):
     item = Item().load(fileDoc["itemId"], force=True)
     return item, fileDoc
 
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable
-# ---------------------------------------------------------------------------
 
 pytestmark = pytest.mark.skipif(
     not mongo_reachable(),
@@ -130,15 +126,14 @@ def test_no_snapshot_no_zip_is_ephemeral_composed(server, owner, studyFolder):
 
 @pytest.mark.plugin("volview")
 def test_empty_folder_opens_config_only_manifest(server, owner, studyFolder):
-    # No zip, no loadable images: the restored compose-direct folder-open returns
-    # an empty manifest (only the config.json resource), matching main -- the
-    # launcher hides the button for unloadable folders anyway.
+    # No zip, no loadable images: the folder-open returns an empty manifest (only
+    # the config.json resource); the launcher hides the button for such folders.
     resp = _folderManifest(server, studyFolder, owner, exception=True)
     assert [r["name"] for r in resp.json["resources"]] == ["config.json"]
 
 
 # ---------------------------------------------------------------------------
-# 2. Explicit zip open (item route) -- regression for the resolver 400
+# 2. Explicit zip open (item route)
 # ---------------------------------------------------------------------------
 
 

@@ -224,10 +224,10 @@ class GirderPlugin(plugin.GirderPlugin):
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview"), downloadResourceManifest
         )
-        # Ordinary session-zip save (restored): item-scoped stuffs the zip into
-        # the item; folder-scoped creates a new session.volview.zip item. Each
-        # returns a resumeUrl the client repoints its urls= at, so a later F5
-        # reloads the just-made save (SAVE-LOAD-RESTORE-SPEC).
+        # Session-zip save: item-scoped stuffs the zip into the item,
+        # folder-scoped creates a new session.volview.zip item. Each returns a
+        # resumeUrl the client repoints its urls= at, so a later F5 reloads the
+        # just-made save.
         info["apiRoot"].item.route("POST", (":itemId", "volview"), saveToItem)
         info["apiRoot"].folder.route("POST", (":folderId", "volview"), saveToFolder)
         info["apiRoot"].file.route(
@@ -236,7 +236,4 @@ class GirderPlugin(plugin.GirderPlugin):
         info["apiRoot"].folder.route(
             "GET", (":folderId", "volview_config", ":name"), getFolderConfigFile
         )
-        # ------------------------------------------------------------------
-        # Processing provider backend
-        # ------------------------------------------------------------------
         addBackendRoutes(info)

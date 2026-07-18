@@ -2,21 +2,7 @@
 against real Girder models + the live cherrypy pipeline. Complements the
 offline ``test_job_history_durability`` unit tests.
 
-Proven here (needs a live pytest-girder Mongo; self-skips when unreachable so the
-offline gate stays green, and must pass wherever Mongo is present):
-
-1. *listJobHistory is context-scoped, not all-user-jobs* — a job stamped with THIS
-   launch folder is listed; one stamped with another folder is not; scoped to the
-   requesting user; the folder ACL gates a stranger.
-2. *Observability bounds* — non-terminal jobs list however old;
-   terminal jobs list only inside the recency window, capped at the 25 newest,
-   newest first.
-3. *Handle shape incl. finishedAt* — the emitted handles match the JobHistorySummary
-   generated JSON Schema; a succeeded job carries a real terminal `finishedAt`, a
-   running one an empty instant.
-4. *Launch manifests carry no session watermark* (regression pin).
-5. *Job-output files are absent from the launch manifest* (folder + item launches)
-   yet stay durable + downloadable.
+Needs a live pytest-girder Mongo; the module self-skips when it is unreachable.
 """
 
 import datetime
@@ -29,11 +15,6 @@ import pytest
 
 import contract_loader
 from girder_volview.backend import inputs, routes
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors the other route tests)
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -54,9 +35,9 @@ ITEM_MANIFEST_PATH = "/item/%s/volview"
 
 
 # Unique per-test logins: under serial full-suite runs the girder db fixture
-# has leaked state across tests (a fixed login "already exists" even though the
-# fixture reports a fresh database), erroring 6 setups here. Unique identities
-# sidestep the leak instead of depending on cleanup ordering.
+# leaks state across tests (a fixed login "already exists" even though the
+# fixture reports a fresh database). Unique identities sidestep the leak instead
+# of depending on cleanup ordering.
 def _uniqueLogin(prefix):
     return f"{prefix}{uuid.uuid4().hex[:8]}"
 
@@ -169,15 +150,12 @@ def _get(server, path, user, params=None):
 
 
 def _handle_validator():
-    # Hard import: jsonschema is a declared test dep; a missing
-    # validator FAILS the conformance layer, never silently skips it.
     schema = contract_loader.load_generated_schema("job-history-summary")
     return jsonschema.Draft202012Validator(schema)
 
 
 # ---------------------------------------------------------------------------
-# 1 + 2 + 3. listJobHistory — context-scoped, observability-bounded,
-# JobHistorySummary shape
+# listJobHistory — context-scoped, observability-bounded, JobHistorySummary shape
 # ---------------------------------------------------------------------------
 
 
@@ -223,12 +201,8 @@ def _backdate(job, when):
 
 @pytest.mark.plugin("volview")
 def test_old_terminal_and_non_terminal_jobs_are_both_reachable(server, owner, folderA):
-    """The observability shrink (window half).
-
-    Non-terminal jobs list UNCONDITIONALLY however old (the reloaded panel
-    adopts them into its poller); terminal jobs list only when created within
-    semantic time cutoff. Old results are reachable through the job route,
-    never this route.
+    """Non-terminal jobs list UNCONDITIONALLY however old (the reloaded panel
+    adopts them into its poller), and terminal history is equally durable.
     """
     from girder_jobs.constants import JobStatus
 
@@ -282,7 +256,7 @@ def test_default_page_bound_has_an_honest_continuation(server, owner, folderA):
 
 @pytest.mark.plugin("volview")
 def test_job_history_history_pages_every_job_once_newest_first(server, owner, folderA):
-    """Case 1: paging is a browse bound, never a retention cutoff."""
+    """Paging is a browse bound, never a retention cutoff."""
     from girder_jobs.constants import JobStatus
 
     now = datetime.datetime.utcnow()
@@ -366,7 +340,7 @@ def test_job_history_cursor_and_page_bounds_fail_closed(server, owner, folderA):
 def test_job_history_history_is_personal_even_in_shared_folder(
     server, owner, stranger, folderA
 ):
-    """Cases 2/3: reopen projects Girder jobs for only the current user."""
+    """Reopen projects Girder jobs for only the current user."""
     from girder.models.folder import Folder
 
     Folder().setUserAccess(folderA, stranger, level=0, save=True)
@@ -379,7 +353,7 @@ def test_job_history_history_is_personal_even_in_shared_folder(
 
 @pytest.mark.plugin("volview")
 def test_job_history_list_is_lightweight_summary(server, owner, folderA):
-    """Case 15: logs and raw parameters are detail-only data."""
+    """Logs and raw parameters are detail-only data."""
     job = _makeStampedJob(owner, folderA)
     from girder_jobs.models.job import Job
 
@@ -405,7 +379,7 @@ def test_job_history_list_is_lightweight_summary(server, owner, folderA):
 
 @pytest.mark.plugin("volview")
 def test_job_history_query_excludes_the_log_field(server, owner, folderA, monkeypatch):
-    """M-7: the history page query must exclude the unbounded log.
+    """The history page query must exclude the unbounded log.
 
     The summary projection never reads the log, but a chatty/failed CLI's log can
     be multi-MB; materializing it per job on every page is pure cost. Capture the
@@ -466,7 +440,7 @@ def test_job_history_batch_preserves_readable_and_missing_counts(
 
 @pytest.mark.plugin("volview")
 def test_job_history_detail_reads_logs_and_parameters_on_demand(server, owner, folderA):
-    """Case 15 control: sensitive/heavy fields require a job-addressed read."""
+    """Sensitive/heavy fields require a job-addressed read."""
     job = _makeStampedJob(owner, folderA)
     from girder_jobs.models.job import Job
 
@@ -494,8 +468,8 @@ def test_job_history_detail_reads_logs_and_parameters_on_demand(server, owner, f
 
 @pytest.mark.plugin("volview")
 def test_job_history_delete_is_explicit_job_mutation(server, owner, folderA):
-    # A terminal job deletes cleanly (a nonterminal job now 409s -- cancel first;
-    # that guard has its own coverage in test_job_deletion_routes).
+    # A terminal job deletes cleanly; the nonterminal 409 guard (cancel first) is
+    # covered in test_job_deletion_routes.
     from girder_jobs.constants import JobStatus
 
     job = _makeStampedJob(owner, folderA, status=JobStatus.SUCCESS)
@@ -534,8 +508,8 @@ def test_handles_match_generated_schema_and_finished_at_gates_on_terminal(
     # The succeeded job carries a real terminal instant; the running one is empty.
     assert byId[str(done["_id"])]["finishedAt"] != ""
     assert "finishedAt" not in byId[str(running["_id"])]
-    # ...and the neutral `state` tracks the same lifecycle, from the
-    # SAME map _projectJobStatus uses (neutral names, never girder's JobStatus).
+    # The neutral `state` comes from the SAME map _projectJobStatus uses (neutral
+    # names, never girder's JobStatus).
     assert byId[str(done["_id"])]["state"] == "success"
     assert byId[str(running["_id"])]["state"] == "running"
 
@@ -552,15 +526,14 @@ def test_list_recent_jobs_scoped_to_requesting_user_and_folder_acl(
 
 
 # ---------------------------------------------------------------------------
-# 4. Launch manifest — the session watermark is GONE (regression pin)
+# Launch manifest — no session watermark
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
 def test_manifests_carry_no_session_watermark(server, owner, folderA):
-    # The session snapshot-and-replay watermark no longer exists: even a launch that
-    # selects a session zip emits a plain `{resources}` manifest — no
-    # `sessionSavedAt`, on the folder route and the item route alike.
+    # Even a launch that selects a session zip emits a plain `{resources}`
+    # manifest — no `sessionSavedAt`, on the folder route and the item route alike.
     from girder.models.item import Item
 
     session = _upload(owner, folderA, "study.volview.zip")
@@ -576,17 +549,16 @@ def test_manifests_carry_no_session_watermark(server, owner, folderA):
 
 
 # ---------------------------------------------------------------------------
-# 5. Job-output files excluded from the launch manifest, yet still durable
+# Job-output files excluded from the launch manifest, yet still durable
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
 def test_folder_manifest_excludes_job_output_but_keeps_the_base(server, owner, folderA):
-    # The restored compose-direct folder launch loads exactly the loadable
-    # images in the folder; the job-output exclusion rides the resolver's
-    # isLoadableImage path (bases only). Ownership is now FOLDER-level: the output
-    # lives in a real, MARKED private output subfolder (created exactly as runTask
-    # does), not a per-item tag on a file loose in the launch folder.
+    # A folder launch loads exactly the loadable images in the folder; the
+    # job-output exclusion rides the resolver's isLoadableImage path (bases only).
+    # Ownership is FOLDER-level: the output lives in a real, MARKED private output
+    # subfolder, created exactly as runTask does.
     from girder.models.file import File
 
     _upload(owner, folderA, "brain.nrrd")
@@ -616,10 +588,10 @@ def test_item_launch_of_a_job_output_returns_empty_alive_manifest(
     output = _upload(owner, outputFolder, "brain.otsu.seg.nrrd")
     outputItem = Item().load(output["itemId"], force=True)
 
-    # The output itself stays excluded as a base (its parent folder is marked), but
-    # the visible item-open affordance returns an empty-but-alive legacy manifest
+    # The output stays excluded as a base (its parent folder is marked), but the
+    # visible item-open affordance returns an empty-but-alive legacy manifest
     # rather than a 400. The config resource is scoped to the item's parent folder,
-    # which is now the private output folder.
+    # here the private output folder.
     resp = server.request(
         path=ITEM_MANIFEST_PATH % outputItem["_id"],
         method="GET",

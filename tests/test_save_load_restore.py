@@ -1,19 +1,16 @@
-"""Save / load / restore round-trip for the restored ordinary session zip.
+"""Save / load / restore round-trip for the session zip, exercising
+``backend/launch.py`` through the live cherrypy pipeline:
 
-Exercises ``backend/launch.py`` through the live cherrypy pipeline against the
-save/restore design:
-
-- **raw checked picks ALWAYS open fresh** (main parity): checking images is the
-  "start fresh" gesture; no saved session is ever substituted;
-- **a checked session item opens through to exactly that session**
-  (back-in-history), and **a filter gesture resumes its newest matching
-  session** while unrelated sessions are ignored;
-- **a bare folder-open resumes** the folder's newest ``session.volview.zip`` (by
+- raw checked picks ALWAYS open fresh: checking images is the "start fresh"
+  gesture, so no saved session is ever substituted;
+- a checked session item opens through to exactly that session, while a filter
+  gesture resumes its newest matching session;
+- a bare folder-open resumes the folder's newest ``session.volview.zip`` (by
   ``created``), else its raw loadable images;
-- **a filter-gesture save is excluded from the bare open** (it carries
-  ``meta.linkedResources.filter``) while a plain save is resumed (OPEN-7);
-- **a save returns a ``resumeUrl``** the client repoints its ``urls=`` at, and
-  that url round-trips the saved zip byte-for-byte.
+- a filter-gesture save carries ``meta.linkedResources.filter`` and is excluded
+  from the bare open; a plain save is resumed;
+- a save returns a ``resumeUrl`` the client repoints its ``urls=`` at, and that
+  url round-trips the saved zip byte-for-byte.
 """
 
 import datetime
@@ -201,8 +198,8 @@ def test_filter_pick_ignores_unrelated_session(server, owner, folder):
 
 @pytest.mark.plugin("volview")
 def test_checked_raw_pick_opens_fresh_despite_matching_session(server, owner, folder):
-    # Main parity: checking raw images is the "start fresh" gesture. Even a
-    # NEWER save recorded against exactly this selection set is not substituted.
+    # Checking raw images is the "start fresh" gesture: even a NEWER save
+    # recorded against exactly this selection set is not substituted.
     itemA, _ = _uploadFile(folder, owner, "a.nrrd")
     itemB, _ = _uploadFile(folder, owner, "b.nrrd")
     linked = {
@@ -285,9 +282,9 @@ def _itemFileDownloadUrl(itemId):
 
 @pytest.mark.plugin("volview")
 def test_checked_old_session_opens_that_session_not_newest(server, owner, folder):
-    # Back-in-history: with several saves accumulated in the folder, explicitly
-    # checking an OLD session item opens through to exactly that session -- it
-    # is never re-matched to the newest sibling save.
+    # With several saves accumulated in the folder, explicitly checking an OLD
+    # session item opens through to exactly that session -- it is never
+    # re-matched to the newest sibling save.
     itemA, _ = _uploadFile(folder, owner, "a.nrrd")
     linked = {"items": [str(itemA["_id"])], "folders": []}
     r1 = _saveToFolder(server, folder, owner, b"first", linked)
@@ -306,9 +303,9 @@ def test_checked_old_session_opens_that_session_not_newest(server, owner, folder
 def test_checked_old_filter_session_opens_that_session_not_newest(
     server, owner, folder
 ):
-    # The same back-in-history gesture for filter-linked sessions: checking an
-    # old filter save opens it, even though re-entering the filter row itself
-    # resumes the newest.
+    # The same gesture for filter-linked sessions: checking an old filter save
+    # opens it, even though re-entering the filter row itself resumes the
+    # newest.
     filter_ = [{"meta.pick": "yes"}]
     _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
     r1 = _saveToFolder(server, folder, owner, b"first", {"filter": filter_})
@@ -341,7 +338,7 @@ def test_filters_must_be_json_object_or_array(server, owner, folder):
 def test_checked_session_save_rebases_linked_resources_to_originals(
     server, owner, folder
 ):
-    # A save made from a *checked-session* open rebases its linkedResources back
+    # A save made from a checked-session open rebases its linkedResources back
     # onto the session's own lineage: the new save records the ORIGINAL raw
     # selection, not {items:[S1]}, keeping the recorded selection truthful.
     from girder.models.item import Item
@@ -350,7 +347,6 @@ def test_checked_session_save_rebases_linked_resources_to_originals(
     itemB, _ = _uploadFile(folder, owner, "b.nrrd")
     originals = {"items": [str(itemA["_id"]), str(itemB["_id"])], "folders": []}
 
-    # First save from the checked originals -> session S1.
     r1 = _saveToFolder(server, folder, owner, b"first-save", originals)
     s1Id = _itemIdFromResume(r1.json["resumeUrl"])
 
@@ -399,8 +395,8 @@ def test_checked_filter_session_save_inherits_filter_lineage(server, owner, fold
 
 @pytest.mark.plugin("volview")
 def test_explicit_selection_wins_over_filters(server, owner, folder):
-    # M-1: a request carrying BOTH items= and filters= loads the checked items;
-    # the filter set does not silently override the explicit selection.
+    # A request carrying BOTH items= and filters= loads the checked items; the
+    # filter set does not silently override the explicit selection.
     _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
     checked, _ = _uploadFile(folder, owner, "checked.nrrd", meta={"pick": "no"})
 
@@ -434,7 +430,6 @@ def test_bare_folder_resumes_newest_session(server, owner, folder):
 
     resp = _folderManifest(server, folder, owner, exception=True)
     names = _resourceNames(resp)
-    # The newest session opens through; not the older one, not the raw image.
     assert "newer.volview.zip" in names
     assert "older.volview.zip" not in names
     assert "brain.nrrd" not in names
@@ -454,17 +449,16 @@ def test_bare_folder_without_session_opens_raw_images(server, owner, folder):
 
 
 # ---------------------------------------------------------------------------
-# 3. OPEN-7: a filter-gesture save is excluded from the bare open; a plain
-#    save is resumed. Exercises the write-side stamp <-> read-side exclusion.
+# 3. A filter-gesture save is excluded from the bare open; a plain save is
+#    resumed. Exercises the write-side stamp <-> read-side exclusion.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
 def test_filter_save_excluded_from_bare_open_plain_save_resumed(server, owner, folder):
     # Plain save first, then a NEWER filter-gesture save (stamps
-    # meta.linkedResources.filter, named session.<...>.volview.zip). The bare
-    # open must exclude the newer filter save and resume the older plain save --
-    # proving the write-side stamp / read-side exclusion, not recency, decides.
+    # meta.linkedResources.filter). The bare open excludes the newer filter save
+    # and resumes the older plain save: the stamp decides, not recency.
     _saveToFolder(server, folder, owner, b"plain-zip", {"items": [], "folders": []})
     _saveToFolder(
         server, folder, owner, b"filter-zip", {"filter": [{"meta.pick": "yes"}]}
@@ -495,8 +489,8 @@ def test_folder_save_returns_only_resume_url_and_creates_session_item(
     resp = _saveToFolder(
         server, folder, owner, b"scene-zip", {"items": [], "folders": []}
     )
-    # The response is a SINGLE field -- the save/load URL -- and carries NO girder
-    # ids: the VolView client stays opaque to the item id.
+    # The response is a SINGLE field -- the save/load URL -- and carries NO
+    # girder ids: the VolView client stays opaque to the item id.
     assert set(resp.json.keys()) == {"resumeUrl"}
     newItemId = _itemIdFromResume(resp.json["resumeUrl"])
     item = Item().load(newItemId, force=True)
@@ -521,7 +515,6 @@ def test_repeat_folder_saves_accumulate_session_items(server, owner, folder):
     firstId = _itemIdFromResume(r1.json["resumeUrl"])
     assert _sessionItemCount(folder) == 1
 
-    # Second save hits the SAME folder route again -> a second session item.
     r2 = _saveToFolder(server, folder, owner, b"second", {"items": [], "folders": []})
     secondId = _itemIdFromResume(r2.json["resumeUrl"])
     assert secondId != firstId
@@ -554,12 +547,10 @@ def test_resume_url_round_trips_saved_zip_byte_identical(server, owner, folder):
     )
     sessionItem = Item().load(_itemIdFromResume(saveResp.json["resumeUrl"]), force=True)
 
-    # GET the resumeUrl -> the manifest names the saved session zip.
     resp = _itemManifest(server, sessionItem, owner, exception=True)
     names = _resourceNames(resp)
     assert any(n.endswith(".volview.zip") for n in names)
 
-    # The stored bytes match what was posted.
     stored = list(Item().childFiles(sessionItem))
     assert len(stored) == 1
     assert _downloadBytes(File().load(stored[0]["_id"], force=True)) == payload

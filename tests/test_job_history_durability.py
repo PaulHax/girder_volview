@@ -1,19 +1,9 @@
 """Offline unit coverage for the backend's neutral job projections.
 
-Pure-stdlib (+ jsonschema) coverage of the backend's neutral projections — no
-Girder/Mongo needed, so it runs in every environment. The live-server assertions
-(``listJobHistory`` scoping + observability bounds, the job-output exclusion,
-still-downloadable-via-job) are in ``test_job_history_durability_routes`` and
-self-skip without Mongo.
-
-What is proven here:
-  * the JobHistorySummary projection matches the frozen golden shape AND validates
-    against the generated JSON Schema (the backend emits exactly the wire shape);
-  * ``finishedAt`` is the terminal status-transition instant (server clock),
-    empty for a never-terminal job;
-  * input opaque URIs are collected verbatim, deduped, type-agnostic;
-  * the legacy manifest carries no session watermark (regression pin)
-    and the job-output marker helpers behave as the manifest path expects.
+Pure-stdlib (+ jsonschema), so it runs in every environment. The live-server
+assertions (``listJobHistory`` scoping + observability bounds, the job-output
+exclusion, still-downloadable-via-job) are in
+``test_job_history_durability_routes`` and self-skip without Mongo.
 """
 
 import datetime
@@ -50,11 +40,8 @@ def _installReadableFiles(monkeypatch, docs):
 
 
 # ---------------------------------------------------------------------------
-# _terminalTime — terminal status-transition instant (server clock)
-#
-# The production history path derives the wire ``finishedAt`` from
-# ``_toIso(_terminalTime(job))`` (see ``_projectJobHistorySummary``); these pin
-# that path directly rather than a helper only tests called.
+# _terminalTime — terminal status-transition instant (server clock). The wire
+# ``finishedAt`` is ``_toIso(_terminalTime(job))``.
 # ---------------------------------------------------------------------------
 
 
@@ -117,8 +104,6 @@ def test_terminal_time_reflects_error_and_cancelled_terminals():
 
 
 def _job_history_validator():
-    # Hard import: jsonschema is a declared test dep; a missing
-    # validator FAILS the conformance layer, never silently skips it.
     schema = contract_loader.load_generated_schema("job-history-summary")
     return jsonschema.Draft202012Validator(schema)
 
@@ -306,8 +291,7 @@ def test_to_iso_tags_naive_utc_and_passes_through_none():
 
 
 def test_legacy_manifest_carries_no_session_watermark(monkeypatch):
-    # Regression pin: the session-replay watermark is gone —
-    # a manifest that selects a session zip carries `resources` ONLY, never a
+    # A manifest that selects a session zip carries `resources` ONLY, never a
     # `sessionSavedAt` field. Stub the api-root URL helper so no Girder server
     # is needed (``handles`` is where the file-url mint reads it).
     monkeypatch.setattr(utils, "getApiRoot", lambda: "api/v1")
@@ -331,14 +315,13 @@ def test_legacy_manifest_carries_no_session_watermark(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # isJobOutputFolder{Item,File} — the FOLDER-marker launch-manifest exclusion
-# (ownership moved from a per-item tag to the item's private parent folder)
 # ---------------------------------------------------------------------------
 
 
 def test_is_job_output_folder_item_reads_the_folder_marker(monkeypatch):
     # Ownership is FOLDER-level: an item is a job output when its PARENT FOLDER
-    # carries the volviewJobOutputFolder marker (the item's own meta is irrelevant
-    # now). A missing/absent parent folder fails toward NOT-a-job-output.
+    # carries the volviewJobOutputFolder marker; the item's own meta is
+    # irrelevant. A missing/absent parent folder fails toward NOT-a-job-output.
     folders = {
         "marked": {"_id": "marked", "meta": {utils.JOB_OUTPUT_FOLDER_META_KEY: True}},
         "plain": {"_id": "plain", "meta": {}},
@@ -391,8 +374,8 @@ def test_manifest_reuses_parent_item_for_dicom_series(
 ):
     # A DICOM series is N files under ONE item; the manifest resolver loads that
     # parent item exactly once (itemCache reuse) and folds the job-output exclusion
-    # in through isLoadableImage -> isJobOutputFolderFile, which now reads the
-    # marker off the item's PARENT FOLDER (not the item meta).
+    # in through isLoadableImage -> isJobOutputFolderFile, which reads the marker
+    # off the item's PARENT FOLDER.
     item_id = "series-item"
     folder_id = "series-folder"
     item_loads = []

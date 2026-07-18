@@ -1,17 +1,11 @@
-"""Shared test scaffolding.
-
-Home for helpers the Mongo-backed route suites all need. ``mongo_reachable`` was
-copy-pasted byte-for-byte into a dozen ``test_*`` modules to drive their
-module-level ``pytestmark`` self-skip; it lives here now and each module imports
-it (``from conftest import mongo_reachable``) while keeping its own skip reason.
-"""
+"""Shared test scaffolding for the Mongo-backed route suites."""
 
 import os
 import socket
 
 
 def mongo_reachable(timeout=0.5):
-    """Whether a live test Mongo is reachable (drives the route suites' self-skip).
+    """Whether a live test Mongo is reachable.
 
     Reads ``GIRDER_TEST_DB`` for a non-default host/port, defaulting to
     ``localhost:27017``, and probes it with a short-timeout TCP connect so the

@@ -1,20 +1,14 @@
 """Offline unit coverage for folder-owned job outputs.
 
-Outputs bind to the job by the finalized file's ACTUAL private parent FOLDER,
-never by a filename, a token, or a caller-supplied job id: each backend job owns
-exactly one server-created private output folder, and a synchronous
-upload-finalization handler hops the finalized file -> its item -> its parent
-folder, finds the job that owns THAT folder, requires the reference identifier to
-be one the job DECLARED, and records the file id ONTO the job keyed by that
-identifier. Result collection reads those ids OFF the job. ``getJobResults`` fails
-loud on a non-succeeded job and reports a ``missing`` count rather than a silent
-``[]``.
+Covers the binding rules stated in ``backend/outputs.py``: correlation by the
+finalized file's actual private parent folder, declared identifiers only, and
+``getJobResults`` failing loud on a non-succeeded job with a ``missing`` count
+rather than a silent ``[]``.
 
-These drive the pure control flow with fake Girder/Job/Item/File models -- no
-live Girder, same spirit as ``test_transient_cleanup`` -- so they run in the
-offline gate too. The real Mongo-backed lifecycle (dotted ``$set`` nesting, the
-item->folder hop against real docs, private-folder ACL, the results route, two
-jobs against two folders) lives in ``test_job_output_binding_routes``.
+These drive the pure control flow with fake Girder/Job/Item/File models, so they
+need no live Girder. The real Mongo-backed lifecycle (dotted ``$set`` nesting,
+the item->folder hop against real docs, private-folder ACL, the results route,
+two jobs against two folders) lives in ``test_job_output_binding_routes``.
 """
 
 import json
@@ -46,7 +40,7 @@ class _FakeJob:
     """Job() stand-in: ``findOne`` by output-folder id, ``updateJob`` records the
     otherFields it was called with AND applies dotted keys into a nested map so a
     follow-up read sees them (mirrors how Mongo interprets a dotted ``$set``
-    path). Correlation is FOLDER-id keyed now -- there is no token."""
+    path). Correlation is keyed by output-folder id; there is no token."""
 
     def __init__(self, jobs=None):
         self._byId = {str(j["_id"]): j for j in (jobs or [])}
@@ -280,7 +274,6 @@ def test_record_output_n_outputs_all_bind_without_overwrite(monkeypatch):
             _uploadEvent(json.dumps({"identifier": name}), fid)
         )
 
-    # Each of the N outputs bound under its own key; none overwrote another.
     assert job[_OUTPUTS] == expected
 
 
@@ -298,8 +291,8 @@ def test_record_output_ignores_referenceless_or_bad_upload(monkeypatch):
 
 
 def test_record_output_ignores_upload_whose_folder_owns_no_job(monkeypatch):
-    # The finalized file's parent folder is not any backend job's output folder --
-    # the record-layer half of "a foreign or uncorrelated upload is never recorded".
+    # The finalized file's parent folder is not any backend job's output folder,
+    # so a foreign or uncorrelated upload is never recorded.
     job = _folderJob("folder-1", [_spec("o")])
     model = _installJob(monkeypatch, _FakeJob([job]))
     _installItem(
@@ -335,10 +328,10 @@ def test_record_output_ignores_malformed_event(monkeypatch):
 
 
 def test_record_output_binds_only_by_actual_parent_folder(monkeypatch):
-    # Plan #4: a crafted reference carrying ANOTHER job's id, a foreign uuid, a
-    # token, and an innocent filename still binds ONLY by the finalized file's
-    # actual private parent folder. Two jobs, each owning a distinct folder; the
-    # file really lives in jobA's folder while the reference names jobB.
+    # A crafted reference carrying ANOTHER job's id, a foreign uuid, a token, and
+    # an innocent filename still binds ONLY by the finalized file's actual private
+    # parent folder. Two jobs, each owning a distinct folder; the file really lives
+    # in jobA's folder while the reference names jobB.
     jobA = _folderJob("folderA", [_spec("outVol")])
     jobB = _folderJob("folderB", [_spec("outVol")])
     _installJob(monkeypatch, _FakeJob([jobA, jobB]))
@@ -362,8 +355,8 @@ def test_record_output_binds_only_by_actual_parent_folder(monkeypatch):
 
 
 def test_record_output_rejects_undeclared_identifier(monkeypatch):
-    # Plan #5: an upload into the job's own folder whose identifier the job never
-    # declared is refused -- correlation binds only DECLARED outputs.
+    # An upload into the job's own folder whose identifier the job never declared
+    # is refused: correlation binds only DECLARED outputs.
     job, model = _bindingSetup(monkeypatch, specs=[_spec("outVol")])
 
     outputs_mod._recordJobOutput(
@@ -375,8 +368,8 @@ def test_record_output_rejects_undeclared_identifier(monkeypatch):
 
 
 def test_record_output_rejects_unsafe_identifier(monkeypatch):
-    # Plan #5 (unsafe half): a dotted / operator identifier is dropped by the parse
-    # guard before it could ever build a nested / $set key -- even were it declared.
+    # A dotted / operator identifier is dropped by the parse guard before it could
+    # ever build a nested / $set key -- even were it declared.
     job, model = _bindingSetup(monkeypatch, specs=[_spec("a.b"), _spec("$set")])
 
     for ident in ("a.b", "$set"):
@@ -427,8 +420,8 @@ def test_prepare_submission_fields_records_specs_folder_and_empty_map():
     assert fields[_SPECS] == [
         {"name": "outSeg", "tag": "image", "isLabel": True, "fileExtensions": ""}
     ]
-    # The private output folder id is part of the FIRST insert -- the sole
-    # correlation + ownership key -- and the old per-hook token list is gone.
+    # The private output folder id is part of the FIRST insert -- it is the sole
+    # correlation + ownership key.
     assert fields[_FOLDER] == str(outputFolder["_id"])
     assert fields[inputs._LAUNCH_FOLDER_FIELD] == str(folder["_id"])
     assert fields["volviewSubmittedParameters"] == {"threshold": 3}
@@ -588,7 +581,7 @@ def test_collect_labelmap_carries_no_segments_payload(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # _jobResultsPayload — honest semantics (non-succeeded/total-loss -> error;
-# succeeded -> {intents, missing} envelope; the client half consumes this)
+# succeeded -> {intents, missing} envelope)
 # ---------------------------------------------------------------------------
 
 
@@ -625,8 +618,8 @@ def test_payload_returns_envelope_on_success(monkeypatch):
     payload = results_mod._jobResultsPayload(
         _job({"outVol": str(fid)}, [_spec("outVol")]), user=None
     )
-    # The {intents, missing} envelope (contract jobResultsSchema): the SAME items
-    # as before, wrapped; a clean success reports missing == 0.
+    # The {intents, missing} envelope (contract jobResultsSchema); a clean success
+    # reports missing == 0.
     assert isinstance(payload, dict)
     assert payload["resultState"] == "ready"
     assert len(payload["intents"]) == 1

@@ -19,7 +19,7 @@ export async function waitForVolViewReady(page: Page, timeout = 90_000) {
 }
 
 // The current value of the tab's `urls=` launch param (decoded). This is where
-// resume-vs-fresh lives (SAVE-LOAD-RESTORE §0): F5 re-fetches exactly this.
+// resume-vs-fresh lives: F5 re-fetches exactly this.
 export function urlsParam(page: Page): string {
   const u = new URL(page.url());
   return u.searchParams.get('urls') || '';
@@ -71,10 +71,8 @@ export async function remoteSave(page: Page): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Jobs / processing apply path. The Jobs module tab (data-testid module-tab-Jobs)
-// appears only when the launch config= registered a processing provider; its job
-// list is folder+user scoped. Selectors from the JobList/SegmentGroupControls/
-// LayerProperties/PatientStudyVolumeBrowser components.
+// Jobs / processing apply path. The Jobs module tab appears only when the launch
+// config= registered a processing provider; its job list is folder+user scoped.
 // ---------------------------------------------------------------------------
 
 // Click a module tab by name (Jobs / Annotations / Rendering / Data).
@@ -97,10 +95,9 @@ export async function loadJobResults(page: Page): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Live submission path (the VISIBLE UI flow, distinct from the come-back
-// "Load results" path above): task picker -> task form -> provenance
-// binding -> Submit -> poll -> LIVE auto-apply (JobsModule.onMounted subscribes
-// to onJobComplete and auto-applies). This is the CI submission gate's driver.
+// Live submission path (the UI flow, distinct from the come-back "Load results"
+// path above): task picker -> task form -> provenance binding -> Submit -> poll
+// -> live auto-apply.
 // ---------------------------------------------------------------------------
 
 // Select a registered task in the Jobs tab's TaskPicker (a v-select labelled

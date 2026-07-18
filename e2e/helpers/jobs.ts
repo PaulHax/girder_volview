@@ -1,12 +1,8 @@
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 
-// ---------------------------------------------------------------------------
 // Processing-job REST helpers — submit a task and poll it to a terminal state,
-// a faithful replica of what the browser client mints (see the Python REST test
-// tests/test_end_to_end_live.py). The browser run-and-apply spec submits the job
-// this way in setup, then drives only the apply UI.
-// ---------------------------------------------------------------------------
+// mirroring the requests the browser client mints.
 
 async function readJson(res: import('@playwright/test').APIResponse, ctx: string): Promise<any> {
   const status = res.status();
@@ -20,8 +16,7 @@ async function readJson(res: import('@playwright/test').APIResponse, ctx: string
 }
 
 // The proxiable URI the backend resolves back to a Girder file id (and re-checks
-// READ ACL): origin-relative /{apiRoot}/file/<id>/proxiable/<name>. This is the
-// exact shape the client mints for a bound image input.
+// READ ACL): origin-relative /{apiRoot}/file/<id>/proxiable/<name>.
 function proxiableUri(fileId: string, name: string): string {
   return `/${CONFIG.apiRoot}/file/${fileId}/proxiable/${encodeURIComponent(name)}`;
 }

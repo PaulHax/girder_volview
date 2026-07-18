@@ -1,19 +1,13 @@
-"""Server-fixture coverage for input-values resolution.
+"""Server-fixture coverage for input-values resolution, against real Girder
+models + the live cherrypy pipeline: a file the submitting user cannot read is
+rejected 403 by the real Girder permission check, and a POST of client-minted
+``{type, uris}`` values to ``runTask`` resolves the backend's own URIs back to
+file ids and forwards them comma-joined to the CLI. The slicer_cli_web docker job
+is stubbed (no docker in CI); everything up to the param the CLI would receive is
+real.
 
-What the offline ``test_input_value_resolution`` unit tests cannot show, exercised
-here against real Girder models + the live cherrypy pipeline:
-
-1. *Real ACL* -- a file the submitting user genuinely cannot read is rejected 403
-   by the Girder permission check (the security boundary), not by a stub.
-2. *End-to-end submit* -- a POST of client-minted ``{type, uris}`` values to the
-   real ``runTask`` route resolves the backend's own URIs back to file ids and
-   forwards the (comma-joined) ids to the CLI (b3). The slicer_cli_web docker job
-   is stubbed (no docker in CI); everything up to and including the param the CLI
-   would receive is real.
-
-Like the other route tests this needs a live pytest-girder server + Mongo; the
-module self-skips when the test Mongo is unreachable so the offline gate stays
-green, and runs (and must pass) wherever Mongo is present.
+Needs a live pytest-girder server + Mongo; self-skips when the test Mongo is
+unreachable so the offline gate stays green.
 """
 
 import io
@@ -27,11 +21,6 @@ from bson.objectid import ObjectId
 import contract_loader
 from girder_volview.backend import inputs, routes, slicer_spec, submit
 from girder_volview.utils import makeFileDownloadUrl
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -187,8 +176,8 @@ def test_stranger_cannot_resolve_owners_private_file_403(
 @pytest.mark.plugin("volview")
 def test_runtask_rejects_output_folder_ref(server, owner, ownerFolder, stubCli):
     # Output location is server-owned: a submitted folderRef on an output value
-    # would redirect a job's outputs out of its own (correlation-key) folder, so it
-    # 400s before any job is created (never reaching job creation).
+    # would redirect a job's outputs out of its own (correlation-key) folder, so
+    # it 400s before any job is created.
     resp = _run(
         server,
         ownerFolder,
@@ -200,7 +189,7 @@ def test_runtask_rejects_output_folder_ref(server, owner, ownerFolder, stubCli):
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: POST client-minted URIs -> ids -> job (acceptance)
+# End-to-end: POST client-minted URIs -> ids -> job
 # ---------------------------------------------------------------------------
 
 
@@ -209,8 +198,6 @@ def test_runtask_end_to_end_minted_uris_to_job(server, owner, ownerFolder, stubC
     f1 = _upload(owner, ownerFolder, "1-001.dcm")
     f2 = _upload(owner, ownerFolder, "1-002.dcm")
     f3 = _upload(owner, ownerFolder, "1-003.dcm")
-    # Built from the dicom-series input-value fixture shape, with real
-    # backend-minted URIs substituted for the fixture's placeholder ids.
     fixture = contract_loader.load_fixture("wire/input-value.dicom-series.json")
     value = {**fixture, "uris": [makeFileDownloadUrl(f) for f in (f1, f2, f3)]}
 
@@ -218,7 +205,6 @@ def test_runtask_end_to_end_minted_uris_to_job(server, owner, ownerFolder, stubC
 
     assert resp.output_status.startswith(b"200")
     assert resp.json["jobId"]
-    # b3: the CLI receives the resolved file ids as one comma-joined <string>.
     assert stubCli["params"]["inputVolume"] == "%s,%s,%s" % (
         f1["_id"],
         f2["_id"],
@@ -255,7 +241,6 @@ def test_runtask_resolves_all_input_files_in_one_batched_query(
     # resolution issues a SINGLE find carrying every id at once (no N+1).
     assert len(finds) == 1
     assert sorted(finds[0]) == sorted(str(fileDoc["_id"]) for fileDoc in files)
-    # The CLI still receives the ids comma-joined in submission order.
     assert stubCli["params"]["inputVolume"] == ",".join(
         str(fileDoc["_id"]) for fileDoc in files
     )
@@ -276,11 +261,8 @@ def test_runtask_single_file_input_to_job(server, owner, ownerFolder, stubCli):
 def test_runtask_hash_named_file_submits_without_400(
     server, owner, ownerFolder, stubCli
 ):
-    # '#'/'?' are legal in Girder file names, and the backend
-    # mints the input handle itself, so its own mint must resolve at submit.
-    # Before the handle module this POST 400d with "Processing input uri does
-    # not match this server's file scheme" -- blaming the client for a string
-    # the backend emitted.
+    # '#'/'?' are legal in Girder file names, and the backend mints the input
+    # handle itself, so its own mint must resolve at submit.
     f1 = _upload(owner, ownerFolder, "scan #2 ?phase.nrrd")
     value = {"type": "image", "uris": [makeFileDownloadUrl(f1)]}
 
@@ -317,10 +299,9 @@ def test_runtask_unreadable_file_returns_403(
 # ---------------------------------------------------------------------------
 # Submit-boundary reserved-param deny-list (fail closed, 400)
 #
-# A separate defense from the spec-side drop (the translator never emits these to
-# the client form; test_slicer_spec_translation asserts that half). Here a crafted
-# submit that feeds a reserved/undeclared param back in is rejected before any job
-# is created -- and the backend's own derived {param}_folder plumbing still works.
+# A defense separate from the spec-side drop: a crafted submit that feeds a
+# reserved/undeclared param back in is rejected before any job is created, while
+# the backend's own derived {param}_folder plumbing still works.
 # ---------------------------------------------------------------------------
 
 
@@ -359,8 +340,8 @@ def test_runtask_denylist_leaves_backend_output_folder_plumbing_intact(
 ):
     # The deny-list screens the RAW submission, so a legitimate output request
     # (key does not end in _folder) still yields the backend's derived
-    # {param}_folder param -- now pointing at the job's NEW private output folder
-    # (a marked child of the launch folder), not the launch folder itself.
+    # {param}_folder param, pointing at the job's private output folder (a marked
+    # child of the launch folder), not the launch folder itself.
     from girder.models.folder import Folder
     from girder_volview.utils import JOB_OUTPUT_FOLDER_META_KEY
 
@@ -372,8 +353,8 @@ def test_runtask_denylist_leaves_backend_output_folder_plumbing_intact(
     resp = _run(server, ownerFolder, owner, values)
     assert resp.output_status.startswith(b"200")
     # The output name is SERVER-OWNED: the client's "result.nrrd" is discarded and
-    # the deterministic server basename wins (C-01). The {param}_folder plumbing is
-    # still derived and points at the job's private output folder.
+    # the deterministic server basename wins (no client-controlled path). The
+    # {param}_folder plumbing still points at the job's private output folder.
     assert stubCli["params"]["outputVolume"] == "scan.Median.outputVolume.nii.gz"
     outputFolderId = stubCli["params"]["outputVolume_folder"]
     assert outputFolderId != str(ownerFolder["_id"])

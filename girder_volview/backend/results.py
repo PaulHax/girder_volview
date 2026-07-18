@@ -1,13 +1,8 @@
 """Processing backend -- job status projection + result collection (the read path).
 
-This module owns the neutral projections the client polls and applies:
-
-- **Status projection**: Girder ``JobStatus`` → the contract's neutral job
-  state / status / handle shapes (never the girder enum on the wire).
-- **Result collection**: reading the file ids ``outputs._recordJobOutput``
-  recorded ON the job (reference-bound, never a folder-name scan) and projecting
-  each into its declarative result intent, inside the honest
-  result-read envelope.
+Girder ``JobStatus`` projects to the contract's neutral shapes (never the girder
+enum on the wire). Results come from the file ids recorded ON the job by
+``outputs._recordJobOutput`` -- reference-bound, never a folder-name scan.
 """
 
 from bson.objectid import ObjectId
@@ -30,9 +25,8 @@ from .outputs import (
 # ---------------------------------------------------------------------------
 
 
-# Lazily-built projection constants. Both depend on optional late imports
-# (girder_jobs / girder_worker), so they are computed on first use and cached
-# module-level rather than rebuilt on every ~2s status poll.
+# Built on first use and cached module-level: both depend on late imports
+# (girder_jobs / girder_worker) unavailable at module import time.
 _WORKER_ACTIVE_STATES = None
 _STATE_MAP = None
 
@@ -61,14 +55,10 @@ def _computeWorkerActiveStates():
 def _workerActiveStates():
     """girder_worker ``CustomJobStatus`` active-state codes (with numeric fallback).
 
-    girder_worker extends girder core's ``JobStatus`` with the states a job passes
-    through while the worker fetches/converts inputs, converts/pushes outputs, or is
-    being canceled. Core's map has no entry for them, so without this they would
-    default to ``"pending"`` and a polling client would see a running job REGRESS to
-    pending. Imported from girder_worker when present; the numeric literals are the
-    stable ``CustomJobStatus`` wire integers used when girder_worker is not
-    importable (it is an optional runtime dependency of this plugin). Built once
-    and cached: the code set is process-stable.
+    Core's ``JobStatus`` map has no entry for these, so without them a running job
+    would default to ``"pending"`` and a polling client would see it REGRESS. The
+    numeric literals are the stable wire integers used when girder_worker (an
+    optional runtime dependency) is not importable.
     """
     global _WORKER_ACTIVE_STATES
     if _WORKER_ACTIVE_STATES is None:
@@ -79,9 +69,8 @@ def _workerActiveStates():
 def _jobStateMap():
     """The girder ``JobStatus`` -> neutral projected-state map, built once.
 
-    girder_jobs is imported lazily (its constants are not importable until the
-    plugin's dependency is loaded), so the map is cached module-level on first use
-    rather than rebuilt on every poll.
+    girder_jobs constants are not importable until the plugin's dependency is
+    loaded, so the map is built lazily and cached.
     """
     global _STATE_MAP
     if _STATE_MAP is None:
@@ -106,9 +95,7 @@ def isTerminalStatus(status):
 
     The single definition of "the job has settled": the terminal-time scan, the
     ownership deletion guard, the transient-input cleanup, and the DELETE route
-    all read it, so what counts as terminal cannot drift between them. girder_jobs
-    is imported lazily (like the other JobStatus-derived constants here) and the
-    set cached module-level rather than rebuilt per call.
+    all read it, so what counts as terminal cannot drift between them.
     """
     return status in terminalStatuses()
 
@@ -131,17 +118,12 @@ def _projectJobState(job):
 
     The single shared JobStatus->state map, read by BOTH the status projection
     (``_projectJobStatus``) and the handle projection
-    (``_projectJobHistorySummary``) — so both derive state from the same
-    source of truth. A job with no ``status`` maps to ``"pending"`` (fail closed).
-    Neutral names only — never the girder ``JobStatus`` enum on the wire.
-
-    girder_worker's active states (fetching/converting/pushing input/output,
-    canceling) project to ``"running"`` — the job is still active until the backend
-    reports a terminal state, so it must never regress to ``"pending"``.
-
-    Output publication never changes this execution state. The canonical
-    ``_projectJobFacts`` projection carries result readiness separately and is
-    consumed by status, history, and result reads.
+    (``_projectJobHistorySummary``), so both derive state from one source of
+    truth. Neutral names only — never the girder ``JobStatus`` enum on the wire.
+    An unknown status maps to ``"pending"`` (fail closed), except girder_worker's
+    active states, which project to ``"running"`` so an active job never regresses.
+    Output publication never changes this execution state; ``_projectJobFacts``
+    carries result readiness separately.
     """
     status = job.get("status")
     state = _jobStateMap().get(status)
@@ -157,9 +139,9 @@ def _progressRatio(job):
 
     Shared by the status projection and the history summary so the summary never
     rebuilds the full status projection (errorTail log join included) just to read
-    progress. Clamp to ``[0, 1]``: a worker/CLI reporting >100% (or a negative)
-    would otherwise fail the client's ``min(0).max(1)`` history-page schema and
-    make it reject the WHOLE page, losing re-discovery for every job in it.
+    progress. The clamp is load-bearing: a worker/CLI reporting >100% (or a
+    negative) fails the client's ``min(0).max(1)`` history-page schema and makes it
+    reject the WHOLE page, losing re-discovery for every job in it.
     """
     progress = job.get("progress") or {}
     if not progress.get("total") or progress.get("current") is None:
@@ -271,19 +253,17 @@ def _intentForOutput(out, url, name, jobId):
     """Build the declarative result intent for one output.
 
     Results cross the wire as declarative intents the client's single applier
-    applies — never a ``role`` the client switches on. The v1 vocabulary the
-    client validates (VolView ``backend-contract/processing/wire.ts``): a labelmap →
+    applies — never a ``role`` the client switches on. The vocabulary the client
+    validates (VolView ``backend-contract/processing/wire.ts``): a labelmap →
     ``add-segment-group``, a plain image → ``add-base-image``. Any other file
-    remains an ordinary result record with no state directive. No CLI declares
-    a state output yet, so ``restore-state`` has no producer here.
+    remains an ordinary result record with no state directive.
 
     A labelmap intent carries a ``source: {jobId, outputId}`` provenance tag
     (``outputId`` = the CLI's output identifier) so the created segment group
-    round-trips the ``.volview.zip`` — display provenance only. A
-    labelmap's segment names/colors travel *inside* the ``.seg.nrrd`` file as
-    embedded metadata and are read client-side, so the backend sets no
-    ``segments`` payload (the wire field stays optional — a producer that embeds
-    its metadata simply never sets it). Validates against the contract
+    round-trips the ``.volview.zip`` — display provenance only. A labelmap's
+    segment names/colors travel *inside* the ``.seg.nrrd`` file as embedded
+    metadata and are read client-side, so the backend sets no ``segments``
+    payload; the wire field stays optional. Validates against the contract
     ``result-intent`` schema.
     """
     fileRef = {"url": url, "name": name}
@@ -318,8 +298,8 @@ def _projectJobFacts(job, user, readableOutputFiles=None):
     state never changes to hide output publication, and missing-output accounting
     cannot disagree between endpoints. File readability comes from the ONE
     batched loader (``_readableOutputFilesForJobs``): the history page passes its
-    page-wide map in; single-job callers omit it and the loader runs for just
-    this job — either way the same two-query ACL check decides readability.
+    page-wide map in, single-job callers omit it and the loader runs for just this
+    job — either way the same two-query ACL check decides readability.
     """
     state = _projectJobState(job)
     if state in {"pending", "running"}:
@@ -374,13 +354,13 @@ def _readableOutputFilesForJobs(jobs, user):
     its whole page, and ``_projectJobFacts`` routes single-job status/result
     reads through it too, so the ACL semantics cannot drift between endpoints.
     The recorded/missing counts are readability-aware, so the ACL check is
-    load-bearing. Girder files inherit access through items, and its generic
-    file permission query falls back to per-item loads. Use two bounded
-    queries instead: fetch the referenced files, then permission-filter their
-    distinct parent items. Files with invalid ids, missing parents, or unreadable
-    parents are absent from the map and therefore count as missing. The returned
-    map is keyed by string id because persisted output ids and model documents
-    may use different ObjectId/string representations. The projection carries
+    load-bearing. Girder files inherit access through items, and its generic file
+    permission query falls back to per-item loads; two bounded queries are used
+    instead: fetch the referenced files, then permission-filter their distinct
+    parent items. Files with invalid ids, missing parents, or unreadable parents
+    are absent from the map and therefore count as missing. The returned map is
+    keyed by string id because persisted output ids and model documents may use
+    different ObjectId/string representations. The projection carries
     ``name``/``mimeType``/``size`` because ``_collectJobResults`` builds result
     intents (download url + file metadata) from these same docs.
     """
@@ -431,24 +411,18 @@ def _collectJobResults(job, user, facts=None):
     Reads the ``{identifier: fileId}`` map ``outputs._recordJobOutput`` recorded ON
     the job (never a folder-name scan, never ``_original_params``), resolves the
     files through the batched READ-permission loader, and projects each into its
-    result intent with a ``makeFileDownloadUrl`` download url (origin-
-    relative and filename-encoded — retiring the hand-built ``/api/v1/file/…``
-    f-string that broke non-default API mounts). Returns ``(results, missing)`` where
-    ``missing`` counts settled unrecorded outputs plus recorded outputs whose file
-    is gone/unreadable — loss is countable, never a silently shorter list. Two
-    concurrent same-name jobs can never cross results: each reads only the ids
-    bound to itself.
+    result intent with a ``makeFileDownloadUrl`` download url — origin-relative and
+    filename-encoded, so non-default API mounts work. Returns ``(results,
+    missing)`` where ``missing`` counts settled unrecorded outputs plus recorded
+    outputs whose file is gone/unreadable — loss is countable, never a silently
+    shorter list. Two concurrent same-name jobs can never cross results: each reads
+    only the ids bound to itself.
     """
     facts = facts or _projectJobFacts(job, user)
     resolved = facts["resolved"]
 
-    # Pass 2: project each resolved file into its declarative result intent
-    # . The wire shape is the intent object itself — `{intent,
-    # url, name, source?}` — plus the `id`/`mimeType`/`size` file metadata the
-    # client's JobList reads. No `role`: the client applies the intent directly
-    # and never switches on a role. A labelmap's segment names/colors
-    # travel inside the `.seg.nrrd` file and are read client-side, so
-    # the backend never content-sniffs an output or pairs a sidecar by position.
+    # The wire shape is the intent object itself — `{intent, url, name, source?}`
+    # — plus the `id`/`mimeType`/`size` file metadata the client's JobList reads.
     results = []
     for entry in resolved:
         out = entry["out"]

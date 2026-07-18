@@ -14,14 +14,8 @@ import {
   shot,
 } from '../helpers/volview';
 
-// Prove the F5 save/load/restore lifecycle per gesture against a DEPLOYED
+// The F5 save/load/restore lifecycle per gesture, against a DEPLOYED
 // girder_volview + VolView stack.
-//   1. launch -> raw images load (fresh)
-//   2. F5 -> STILL fresh (no old save pulled in) -- even with a session in the folder
-//   3. save -> the tab repoints urls= to the save's resumeUrl
-//   4. F5 -> the just-made save reloads (resume)
-//   5. save again -> F5 -> the SECOND save reloads
-// The URL/manifest invariants are asserted automatically on the loaded-image scene.
 
 const isSessionManifest = (json: any) =>
   Array.isArray(json?.resources) &&
@@ -34,7 +28,6 @@ const isManifestGet = (response: { request: () => { method: () => string }; url:
   response.request().method() === 'GET' &&
   /\/(item|folder)\/[^/]+\/volview$/.test(new URL(response.url()).pathname);
 
-// Navigate to a launch/manifest URL and capture the manifest GET's JSON body.
 async function gotoCapturingManifest(page: Page, url: string): Promise<any> {
   const manifestResp = page.waitForResponse(
     isManifestGet,
@@ -51,7 +44,6 @@ async function gotoCapturingManifest(page: Page, url: string): Promise<any> {
   }
 }
 
-// Re-fetch the current tab (F5) and re-capture the manifest it loads.
 async function reloadCapturingManifest(page: Page): Promise<any> {
   const manifestResp = page.waitForResponse(
     isManifestGet,
@@ -83,8 +75,7 @@ test.describe('save/load/restore F5 lifecycle', () => {
     }, info) => {
       const { url, freshManifest } = launchUrl(g, gesture);
 
-      // 1. Launch -> fresh: the tab points at the picked manifest, which names
-      //    the picked raw image(s) and NEVER a session zip.
+      // 1. Launch -> fresh: the picked manifest, never a session zip.
       const m1 = await gotoCapturingManifest(page, url);
       await shot(page, info, `${gesture}-1-launch-fresh`);
       expect(urlsParam(page), 'launch urls= should be the picked manifest').toBe(freshManifest);
@@ -93,8 +84,8 @@ test.describe('save/load/restore F5 lifecycle', () => {
         expect(resourceNames(m1).some((n) => n !== 'config.json')).toBeTruthy();
       }
 
-      // 2. F5 before saving -> STILL fresh (anti-substitution). The urls= param
-      //    is unchanged and the manifest still names no session zip.
+      // 2. F5 before saving -> STILL fresh: a session already in the folder must
+      //    not be substituted for the picked images.
       const m2 = await reloadCapturingManifest(page);
       await shot(page, info, `${gesture}-2-f5-stays-fresh`);
       expect(urlsParam(page), 'F5-before-save must not repoint').toBe(freshManifest);
@@ -195,7 +186,6 @@ test.describe('save/load/restore F5 lifecycle', () => {
   });
 
   test('config sanity: deployment + provisioned folder are reachable', async ({ page }) => {
-    // A fast fail-early check with a clear message if the stack/provisioning is wrong.
     expect(g.folderId, 'no launch folder (global setup did not provision one)').toBeTruthy();
     expect(g.itemName, 'no loadable image in the launch folder').toBeTruthy();
     const { url } = launchUrl(g, 'single-item');

@@ -1,26 +1,16 @@
 """Offline unit coverage for the submit-boundary parameter guards.
 
-Three server-owned invariants, provable without Mongo/slicer_cli_web:
+Three clusters, all documented in ``backend/submit.py``:
 
-1. *Server-owned output names* (C-01) -- ``_autofillOutputs`` ALWAYS overwrites an
-   output param's ``name`` with the deterministic server-side basename and never
-   honors a client-supplied one, so a crafted output name like
-   ``../../../../etc/passwd`` (a worker-host path-traversal vector) cannot reach the
-   CLI. Other client-supplied keys on the output value merge through; only ``name``
-   is normative. The overwrite alone is not enough: the *input-derived* name
-   component comes from a client-minted handle whose percent-encoded tail can
-   decode to a traversal path (``%2F`` survives the handle parser's pre-decode
-   slash check), so every composed component is collapsed to a separator-free
-   token through ``_safeNameToken``.
-2. *Declared-key-only submissions* (M-01) -- ``_rejectUndeclaredSubmitParams``
-   rejects (400) any submitted key the task's CLI does not declare, while declared
-   keys pass.
-3. *Declared-value validation* (M-01 residual) -- ``_validateDeclaredSubmitValues``
-   rejects (400, naming the parameter) a declared key whose value mismatches the
-   CLI declaration: wrong scalar type, out-of-``<constraints>``-range number,
-   non-member enumeration value, ill-typed vector elements, an input object
-   without a ``uris`` list, or a declared OUTPUT smuggling ``uris`` (which would
-   otherwise shape-match the translator's input branch and die downstream).
+* ``_autofillOutputs`` -- output ``name`` is server-owned, and every composed
+  component (including the one derived from a client-minted handle, whose
+  percent-encoded tail can decode to a traversal path) goes through
+  ``_safeNameToken``;
+* ``_rejectUndeclaredSubmitParams`` -- a key the CLI does not declare is a 400;
+* ``_validateDeclaredSubmitValues`` -- a declared key whose value mismatches the
+  declaration is a 400 naming the parameter (scalar type, ``<constraints>``
+  range, enumeration membership, vector elements, an input object with no
+  ``uris``, and a declared OUTPUT smuggling ``uris``).
 """
 
 import pytest
@@ -48,7 +38,7 @@ _CLI_DECLARED = slicer_spec.declared_params(_CLI_XML)
 
 
 # ---------------------------------------------------------------------------
-# C-01 — server-owned output names
+# Server-owned output names
 # ---------------------------------------------------------------------------
 
 
@@ -81,8 +71,8 @@ def test_autofill_generates_name_for_an_unfilled_output():
 
 
 def test_autofill_sanitizes_encoded_traversal_input_handle_name(monkeypatch):
-    # C-01 round 3: the traversal can also ride in on an INPUT handle. The
-    # handle grammar rejects a literal `/` in the tail but percent-DECODES it
+    # The traversal can also ride in on an INPUT handle. The handle grammar
+    # rejects a literal `/` in the tail but percent-DECODES it
     # afterwards, so a minted name of `safe/../../../../etc/passwd.nii.gz`
     # (encoded, one legal segment) decodes back to a path. The input-derived
     # output-name component must collapse to its basename.
@@ -118,7 +108,7 @@ def test_candidate_output_name_sanitizes_all_components():
 
 
 # ---------------------------------------------------------------------------
-# M-01 — reject undeclared submission keys
+# Reject undeclared submission keys
 # ---------------------------------------------------------------------------
 
 
@@ -172,7 +162,7 @@ def test_reject_undeclared_param_tolerates_empty_and_none():
 
 
 # ---------------------------------------------------------------------------
-# M-01 residual — validate declared values against the CLI declaration
+# Validate declared values against the CLI declaration
 # ---------------------------------------------------------------------------
 
 # One param of every validated shape: typed scalars (with <constraints>), both
@@ -296,10 +286,9 @@ def test_validate_rejects_input_without_uris_list():
 
 
 def test_validate_rejects_output_smuggling_uris():
-    # The review's confirmed M-01 repro: an output object carrying ``uris``
-    # merged through autofill and shape-matched the translator's INPUT branch,
-    # losing its output-folder param and dying as an internal error. Now a
-    # boundary 400.
+    # An output object carrying ``uris`` merges through autofill and
+    # shape-matches the translator's INPUT branch, losing its output-folder
+    # param and dying as an internal error. The boundary 400s it instead.
     _assert_value_rejected(
         {"outputVolume": {"uris": ["girder://x"]}}, "outputVolume", "uris"
     )
@@ -326,7 +315,7 @@ def test_validate_values_covers_params_outside_label_sections():
 
 
 # ---------------------------------------------------------------------------
-# C-1 — a <region> param's client bounds box is inverted to Slicer's RAS
+# A <region> param's client bounds box is inverted to Slicer's RAS
 # center+radius grammar at submit. The client mints the crop box as an LPS
 # min/max box; the generic list branch would comma-join it verbatim, feeding the
 # CLI min/max where it reads center/radius (wrong spatial region, silently). The

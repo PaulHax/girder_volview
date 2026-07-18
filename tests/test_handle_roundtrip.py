@@ -6,17 +6,16 @@ the handle module percent-encodes the file-name segment at mint and
 unescapes it at parse, so
 
 - ``parseFileHandle(mintFileHandle(fileId, name)) == (fileId, name)`` for
-  every corpus name -- including ``#``, ``?``, ``%``, spaces and unicode
-  (the root cause was mint embedding raw names that parse rejected);
+  every corpus name -- including ``#``, ``?``, ``%``, spaces and unicode;
 - ``mintFileHandle(*parseFileHandle(handle)) == handle`` byte-for-byte for
   the corpus exemplar handles;
 - every mint site routes through the ONE module
   (``utils.makeFileDownloadUrl`` is a delegate);
-- legacy raw-name handles (minted before the escaping fix, persisted in
-  records/scenes or held by a live client) still parse to the same file id;
+- legacy raw-name handles, persisted in records/scenes or held by a live
+  client, still parse to the same file id;
 - genuinely foreign shapes stay rejected.
 
-Offline: pure string math, no Mongo (mirrors ``test_input_value_resolution``).
+Offline: pure string math, no Mongo.
 """
 
 import pytest
@@ -53,9 +52,9 @@ def test_mint_percent_encodes_the_name_segment(name, escaped):
     fileId = str(ObjectId())
     handle = handles.mintFileHandle(fileId, name)
     assert handle == "/%s/file/%s/proxiable/%s" % (API_ROOT, fileId, escaped)
-    # No raw fragment/query delimiter (or space) ever rides the wire: the
+    # No raw fragment/query delimiter (or space) ever rides the wire, so the
     # emitted handle survives URL contexts without the browser or an
-    # intermediary splitting it (the silent-inert / hard-400 seam).
+    # intermediary splitting it.
     assert "#" not in handle
     assert "?" not in handle
     assert " " not in handle
@@ -106,16 +105,15 @@ def test_file_id_from_minted_uri_reads_every_corpus_mint(name, escaped):
     "rawName",
     [
         "brain.nrrd",  # clean names: old and new format coincide
-        "left lung mask.seg.nrrd",  # raw space (the common pre-fix shape)
+        "left lung mask.seg.nrrd",  # raw space
         "Lesion #1.seg.nrrd",  # raw fragment delimiter
         "flow ?phase.nrrd",  # raw query delimiter
     ],
 )
 def test_legacy_raw_name_handles_still_resolve_the_same_file(rawName):
-    # Handles minted BEFORE the escaping fix embed the raw name. They are
-    # already persisted (job stamps, held client echoes), so parse accepts
-    # any single-segment tail and recovers the id -- the identity half of
-    # the round trip is what every runtime caller consumes.
+    # Legacy handles embed the raw name and are already persisted (job stamps,
+    # held client echoes), so parse accepts any single-segment tail and
+    # recovers the id.
     fileId = str(ObjectId())
     legacy = "/%s/file/%s/proxiable/%s" % (API_ROOT, fileId, rawName)
     parsed = handles.parseFileHandle(legacy)

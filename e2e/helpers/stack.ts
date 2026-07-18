@@ -3,19 +3,25 @@ import * as path from 'path';
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 
-// ---------------------------------------------------------------------------
-// Stack lifecycle. The suite assumes an already-deployed paired stack — this
-// worktree's backend plus the paired VolView dist, with a deploy receipt next
-// to the served SPA (the contract is documented in e2e/README
-// "Prerequisites"); it does not manage docker. Two checks run in global setup:
-// a fail-fast health probe, then a deploy-receipt guard that refuses to run
-// against a stale/wrong deploy.
-// ---------------------------------------------------------------------------
+// The suite assumes an already-deployed paired stack; it does not manage docker.
+// The stack must satisfy four things:
+//
+//   1. girder reachable at CONFIG.baseURL with CONFIG's credentials;
+//   2. the backend is THIS worktree's girder_volview;
+//   3. the SPA at static/built/plugins/volview/ is the paired,
+//      processing-enabled VolView build — a plain `girder build` re-clobbers it
+//      with the pinned npm package, which drops the save button and breaks the
+//      save/restore specs;
+//   4. a deploy receipt (below) written next to the served index.html.
+//
+// Writing the receipt is the deploy tooling's LAST step, so its presence
+// certifies the rest.
 
 const VERSION_URL = apiUrl('/system/version');
 
 const RECEIPT_HINT =
-  'Deploy the paired stack and write the deploy receipt — see e2e/README "Prerequisites".';
+  'Deploy the paired stack, writing deployed-heads.json next to the served ' +
+  'index.html as the last step (see the contract atop this file).';
 
 const BRING_UP_HINT =
   `\n${RECEIPT_HINT}\n` +
@@ -30,23 +36,19 @@ async function versionReachable(request: APIRequestContext): Promise<boolean> {
   }
 }
 
-// Fail-fast: a single-shot health check with an actionable error if girder is
-// down, so the tests never spin against a dead stack.
+// Single-shot health check so the tests never spin against a dead stack.
 export async function healthCheck(request: APIRequestContext): Promise<void> {
   if (await versionReachable(request)) return;
   throw new Error(`[e2e] girder is not reachable at ${VERSION_URL}.${BRING_UP_HINT}`);
 }
 
-// ---------------------------------------------------------------------------
-// Deploy guard. The deploy step writes a receipt next to the served SPA
-// recording the worktree HEADs it deployed (the receipt contract is in
-// e2e/README "Prerequisites"). Refuse to run unless the stack is serving THIS
-// girder_volview worktree's current HEAD — so a stale/wrong deploy fails fast
-// and loud instead of surfacing as a confusing mid-test assertion (the exact
-// trap an earlier run fell into: it tested a different checkout).
-// ---------------------------------------------------------------------------
+// Deploy guard. The deploy step writes a receipt recording the worktree HEADs it
+// deployed. Refuse to run unless the stack serves THIS worktree's current HEAD,
+// so a stale deploy fails loud instead of surfacing as a confusing mid-test
+// assertion against a different checkout.
 const RECEIPT_URL = `${CONFIG.baseURL}/static/built/plugins/volview/deployed-heads.json`;
 
+// Only girderSha is enforced; the rest are informational. Extra fields are fine.
 type DeployReceipt = {
   girderSha?: string;
   girderShort?: string;

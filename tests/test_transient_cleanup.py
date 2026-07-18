@@ -1,11 +1,10 @@
-"""Offline unit coverage for the transient-cleanup cluster (rebuilt).
+"""Offline unit coverage for the transient-cleanup cluster around *staged*
+inputs: the job-bound terminal cleanup, the submit-side job marking, and the TTL
+orphan sweep.
 
-An earlier b1 transient cluster was deleted; this cluster was rebuilt for *staged*
-inputs: the job-bound terminal cleanup, the submit-side job marking, and
-the TTL orphan sweep. These drive the pure control flow with fake Girder/Job
-models -- no live Girder, same spirit as ``test_input_value_resolution`` -- so
-they run in the offline gate too. The real Mongo-backed lifecycle (stage route ->
-job terminal -> delete; orphan *age* discrimination) lives in
+These drive the pure control flow with fake Girder/Job models -- no live Girder
+-- so they run in the offline gate. The real Mongo-backed lifecycle (stage route
+-> job terminal -> delete; orphan *age* discrimination) lives in
 ``test_staging_routes``.
 """
 
@@ -272,14 +271,11 @@ def test_staged_inputs_are_copied_and_params_rewritten(monkeypatch):
         params, resolved, user=object(), outputFolder=outputFolder
     )
 
-    # Exactly the staged item was copied, into the job's private folder.
     assert len(model.copies) == 1
     srcId, destFolderId, newItemId = model.copies[0]
     assert srcId == str(stagedItemId)
     assert destFolderId == str(outputFolder["_id"])
     assert copied == [newItemId]
-    # The staged param now points at the COPY's file; everything else is
-    # untouched (including non-input params).
     copiedFileId = str(model.childFiles({"_id": ObjectId(newItemId)})[0]["_id"])
     assert newParams["segmentation"] == copiedFileId
     assert newParams["segmentation"] != str(stagedFile["_id"])
@@ -311,8 +307,6 @@ def test_copy_raises_conflict_when_parent_item_vanished_mid_submit(monkeypatch):
 
 
 def test_shared_staged_input_copied_once_per_job_submission(monkeypatch):
-    # One staged item bound to TWO params of one submission: copied once, both
-    # params rewritten onto the same copy.
     stagedItemId = ObjectId()
     stagedFile = {"_id": ObjectId(), "name": "seg.seg.nrrd", "itemId": stagedItemId}
     model = _installItemModel(

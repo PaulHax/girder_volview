@@ -60,9 +60,8 @@ def test_container_token_is_scope_limited_to_data_read_write(fakeDockerStack):
         name="Median", xml="<executable/>", item={"meta": {}}
     )
     user = {"_id": "user-1", "login": "u"}
-    # Representative initial job fields (the output-folder ownership key rides
-    # here now; there is no token field -- the container token is NEVER persisted
-    # on the job, so `_genDockerJob` adds no key to what we passed).
+    # Representative initial job fields. The container token is NEVER persisted
+    # on the job, so `_genDockerJob` adds no key to what we passed.
     fields = {outputs._OUTPUT_FOLDER_ID_FIELD: "an-output-folder-id"}
 
     job = routes._genDockerJob(cliItem, {"inputVolume": "abc"}, user, fields)

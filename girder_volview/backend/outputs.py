@@ -7,20 +7,13 @@ by a filename, a token, or a caller-supplied job id (all of which are
 attacker-controllable). The read path (projecting recorded ids into result
 intents) and status projection live in ``results.py``.
 
-Ownership is also the deletion boundary. A ``model.job.remove`` handler
-cascade-deletes the owned output folder and any remaining staged inputs and
-REFUSES to remove a non-terminal owned job -- so neither our own DELETE route nor
-Girder's built-in job route can orphan a running job's private resources. Girder
-triggers ``model.job.remove`` synchronously BEFORE the DB delete and wraps
-handlers in no try/except, so raising here aborts the removal and retains the job
-record as the discoverable owner of whatever is left.
-
-The cascade is bidirectional (D13): a ``model.folder.remove`` handler deletes
-the owning job when its output folder is removed in the Girder hierarchy (with a
-REST-level pre-guard refusing a live job's folder before any contents are
-cleaned), so folder deletion — per job, or the whole ``volview-jobs`` container —
-is a first-class "delete the job(s)" gesture and orphaned job rows never
-accumulate.
+Ownership is also the deletion boundary, and it cascades both ways: a
+``model.job.remove`` handler deletes the owned output folder plus any remaining
+staged inputs and REFUSES a non-terminal owned job, while a
+``model.folder.remove`` handler deletes the owning job when its output folder is
+removed in the Girder hierarchy. Girder fires these handlers synchronously
+BEFORE the DB delete and wraps them in no try/except, so raising aborts the
+removal and retains the job record as the discoverable owner of whatever is left.
 """
 
 import json
@@ -212,7 +205,7 @@ _CASCADING_FOLDER_IDS = set()
 def _cascadeDeleteFolderOwnedJob(event):
     """``model.folder.remove`` handler: removing a job's output folder removes the job.
 
-    The reverse of ``_cascadeDeleteJobOwnedResources`` (D13): the private output
+    The reverse of ``_cascadeDeleteJobOwnedResources``: the private output
     folder is the job's sole owned storage, so deleting it in the Girder
     hierarchy means "delete this job". Removing the ``volview-jobs`` container
     recurses through the per-job subfolders, firing this handler once per job.

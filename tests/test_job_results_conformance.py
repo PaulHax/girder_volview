@@ -4,14 +4,12 @@ The backend's ``getJobResults`` route returns the neutral result-read envelope
 (the status/results contract): a succeeded job yields
 ``{"intents": [...], "missing": N}``
 (``jobResultsSchema``), and a non-success / total-loss read is a separate error
-shape (``jobResultsErrorSchema``). Like the ``wire.spec.ts`` client suite, this
-validates BOTH the shared golden fixtures AND a REAL backend-shaped payload
-against the same generated JSON Schemas the contract publishes — one normative
-definition, two validators — discharging the obligation that every
-published schema gets a validating consumer.
+shape (``jobResultsErrorSchema``). Both the shared golden fixtures and a
+backend-shaped payload are validated against the generated JSON Schemas the
+contract publishes.
 
-Offline (no Girder/Mongo): pure fixtures + schema. The live route payload is
-validated end-to-end in ``test_job_output_binding_routes``.
+Runs offline on pure fixtures + schema. The live route payload is validated
+end-to-end in ``test_job_output_binding_routes``.
 """
 
 import jsonschema
@@ -24,9 +22,8 @@ def _validator(schema_name):
     """Build a Draft2020-12 validator for a generated schema.
 
     The generated schema is the backend-side stand-in for the normative ``zod``
-    definition (internal conformance tooling, not the contract format).
-    ``jsonschema`` is a hard test dependency: a missing validator FAILS
-    this conformance layer rather than silently skipping it.
+    definition. ``jsonschema`` is a hard test dependency: a missing validator
+    FAILS this conformance layer rather than silently skipping it.
     """
     schema = contract_loader.load_generated_schema(schema_name)
     return jsonschema.Draft202012Validator(schema)
@@ -38,8 +35,7 @@ def _validator(schema_name):
 
 
 def test_missing_fixture_validates_against_job_results_schema():
-    # The golden fixture pins a PURE-intent envelope (contract vocabulary floor)
-    # with an explicit missing count.
+    # The golden fixture pins a pure-intent envelope with an explicit missing count.
     fixture = contract_loader.load_fixture("wire/job-results.missing.json")
     _validator("job-results").validate(fixture)
     assert fixture["missing"] == 2
@@ -47,12 +43,10 @@ def test_missing_fixture_validates_against_job_results_schema():
 
 
 def test_hybrid_backend_payload_validates_against_job_results_schema():
-    # The REAL backend route emits items carrying the intent fields PLUS the
-    # required id and advisory mimeType/size the client's JobList reads (mimeType/
-    # size may be null for an asset-store import). id/mimeType/size are now
-    # DECLARED fields of the canonical result-list item, so each item validates
-    # DIRECTLY against its strict known-intent member (no reliance on the
-    # fail-open branch's catchall).
+    # The backend route emits the intent fields plus the required id and advisory
+    # mimeType/size the client's JobList reads. All three are declared fields of
+    # the canonical result-list item, so each item validates directly against its
+    # strict known-intent member rather than the fail-open catchall.
     payload = {
         "resultState": "incomplete",
         "intents": [
@@ -91,7 +85,6 @@ def test_envelope_without_readiness_or_missing_is_rejected():
 
 
 def test_envelope_missing_intents_is_rejected():
-    # intents is REQUIRED — an object with only a count is not a valid envelope.
     validator = _validator("job-results")
     with pytest.raises(Exception):
         validator.validate({"resultState": "incomplete", "missing": 2})

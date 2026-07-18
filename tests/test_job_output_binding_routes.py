@@ -1,30 +1,14 @@
-"""Server-fixture coverage for folder-owned job outputs.
+"""Live-server coverage for folder-owned job outputs.
 
-What the offline ``test_job_output_binding`` unit tests cannot show, exercised
-here against real Girder models + the live cherrypy pipeline:
+Exercises against real Girder models + the cherrypy pipeline what the offline
+``test_job_output_binding`` unit tests cannot: real Mongo dotted-key binding
+correlated by the finalized file's actual parent folder, the end-to-end results
+route with real download urls and per-user File ACL, honest envelopes for
+non-succeeded jobs and deleted outputs, per-job output-folder isolation, the
+folder's submitter-only privacy, and first-insert folder ownership.
 
-1. *Real Mongo binding* -- ``_recordJobOutput`` records a file id under the output
-   identifier via a dotted ``otherFields`` key, and real Mongo interprets it as a
-   nested ``$set`` path (so ``_collectJobResults`` reads it back), 0/1/N outputs
-   each under their own key, correlated by the finalized file's ACTUAL private
-   parent folder (the item -> folder hop against real docs).
-2. *End-to-end results route* -- a succeeded job's ``GET .../results`` returns the
-   folder-bound intents with real ``makeFileDownloadUrl`` urls and real per-user
-   File ACL, never a folder-name scan.
-3. *Honest semantics* -- a non-succeeded job and a job whose output was deleted
-   both return the honest envelope, never a silent ``[]``.
-4. *Ownership never crosses* -- two jobs own two DISTINCT private output folders,
-   so uploads writing the SAME filename never cross results.
-5. *The private folder is really private* -- a stranger can neither read nor write
-   a job's output folder (submitter-only ADMIN ACL), and its files never appear in
-   an ordinary launch listing.
-6. *First-insert ownership* -- immediately after ``runTask`` returns 200 the
-   created job already carries the output-folder id (it was in the FIRST insert,
-   queryable before any worker upload can race in).
-
-Like ``test_staging_routes`` this needs a live pytest-girder server + Mongo; the
-module self-skips when the test Mongo is unreachable so the offline gate stays
-green, and runs (and must pass) wherever Mongo is present.
+Needs a live pytest-girder server + Mongo; self-skips when the test Mongo is
+unreachable.
 """
 
 import io
@@ -39,11 +23,6 @@ from bson.objectid import ObjectId
 
 from girder_volview.backend import outputs, routes, slicer_spec, submit
 from girder_volview.utils import JOB_OUTPUT_FOLDER_META_KEY
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable (mirrors test_staging_routes)
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -108,9 +87,7 @@ def ownerFolder(fsAssetstore, owner):
 
 
 # ---------------------------------------------------------------------------
-# Helpers: create a job that OWNS a real private output folder, then upload an
-# output INTO that folder so the real synchronous finalization event correlates
-# it by the file's ACTUAL parent folder before uploadFromFile returns. No token.
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -216,8 +193,7 @@ def test_zero_outputs_records_nothing(server, owner, ownerFolder):
 
 @pytest.fixture
 def _make(owner, ownerFolder):
-    """Bind ``_makeBoundJob`` to the launch folder so tests read like the old
-    (folderless) signature."""
+    """Bind ``_makeBoundJob`` to the launch folder."""
 
     def factory(cli_xml=_CLI_XML_IMAGE):
         return _makeBoundJob(owner, ownerFolder, cli_xml)
@@ -284,8 +260,7 @@ def test_results_route_returns_folder_bound_intent(server, owner, _make):
     assert len(intents) == 1
     assert intents[0]["id"] == str(fileDoc["_id"])
     assert intents[0]["intent"] == "add-base-image"
-    # Built via makeFileDownloadUrl (origin-relative, filename-encoded), NOT the
-    # retired hand-built f-string.
+    # Built via makeFileDownloadUrl: origin-relative and filename-encoded.
     assert (
         intents[0]["url"]
         == "/api/v1/file/%s/proxiable/brain.otsu.nii.gz" % fileDoc["_id"]
@@ -545,22 +520,20 @@ def test_runtask_created_job_already_owns_output_folder(
     assert ObjectId(folderId)  # a real folder id, not a placeholder
 
     # ...and it is a real, private, marked folder nested in the launch folder's
-    # volview-jobs container (D13).
+    # volview-jobs container.
     outputFolder = Folder().load(folderId, force=True)
     container = Folder().load(outputFolder["parentId"], force=True)
     assert container["name"] == routes.JOBS_CONTAINER_NAME
     assert str(container["parentId"]) == str(ownerFolder["_id"])
     assert outputFolder["public"] is False
     assert outputFolder["meta"][JOB_OUTPUT_FOLDER_META_KEY] is True
-    # Every declared output was forced into that same folder.
-    # (The stub captured no params, but the job's ownership field is the proof.)
 
 
 @pytest.mark.plugin("volview")
 def test_runtask_discards_client_output_name_traversal(
     server, owner, ownerFolder, runStub
 ):
-    """C-01: a crafted client output name never reaches the CLI -- the server
+    """A crafted client output name never reaches the CLI -- the server
     overwrites it with a safe deterministic basename."""
     from girder_jobs.models.job import Job
 
@@ -584,7 +557,7 @@ def test_runtask_discards_client_output_name_traversal(
 
 @pytest.mark.plugin("volview")
 def test_runtask_rejects_undeclared_param(server, owner, ownerFolder, runStub):
-    """M-01: a submission key the CLI does not declare is a 400 at the boundary."""
+    """A submission key the CLI does not declare is a 400 at the boundary."""
     resp = server.request(
         path=RUN_PATH % ownerFolder["_id"],
         method="POST",

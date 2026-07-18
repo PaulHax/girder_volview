@@ -1,11 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-// ---------------------------------------------------------------------------
-// The provisioned-state file bridges the Playwright global setup (which creates
-// the test folder + images) to the tests and the global teardown. It is
-// gitignored and rewritten on every run.
-// ---------------------------------------------------------------------------
+// The provisioned-state file bridges the Playwright global setup to the tests
+// and the global teardown. It is gitignored and rewritten on every run.
 export type E2eState = {
   // Folder the gestures launch against.
   folderId: string;

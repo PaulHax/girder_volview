@@ -19,14 +19,11 @@ import {
   shot,
 } from '../helpers/volview';
 
-// The jobs/processing plane in the browser (complements the Python REST test).
-// Setup submits an Otsu job over REST (folder+user scoped to the same admin the
-// tab runs as), polls it to success, then the test launches VolView on that
-// folder — the launch carries config= (which is what makes the Jobs tab appear)
-// and loads the image as a base — and drives the COME-BACK path: the job
-// finished before this tab existed, so Jobs -> "Load results" fetches and
-// applies by declared intent (the Otsu labelmap attaches as a segment group to
-// the parent image reconstructed from the persisted input provenance).
+// The jobs/processing plane in the browser. Setup submits an Otsu job over REST
+// (folder+user scoped to the same admin the tab runs as) and polls it to
+// success, so the launched tab meets a job that finished before it existed and
+// must reach it through the come-back path. The launch carries config=, which
+// is what makes the Jobs tab appear.
 
 test.describe.configure({ mode: 'serial' });
 
@@ -85,14 +82,10 @@ test.describe('jobs come-back path (Load results)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The CI SUBMISSION GATE (token-only). Drives the full visible UI path — task
-// picker -> task form -> provenance binding -> Submit -> poll -> authenticated
-// result stream -> LIVE auto-apply — with token-only auth (no girderToken
-// cookie). This is the gate that fails if selection, submission, polling,
-// authenticated byte download, or live auto-apply regresses. The REST-seeded
-// come-back case above covers the explicit "Load results" path only.
-// ---------------------------------------------------------------------------
+// Drives the full visible UI path — task picker, form, provenance binding,
+// Submit, poll, authenticated result stream, live auto-apply — under token-only
+// auth with no girderToken cookie. The come-back suite above covers the
+// explicit "Load results" path only.
 test.describe('token-only run + live auto-apply (the submission gate)', () => {
   test('launches token-only, submits from the UI, and live-auto-applies without a cookie', async ({
     browser,

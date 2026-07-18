@@ -1,26 +1,13 @@
 """Loader for VolView's backend-contract golden fixtures + generated JSON
 Schemas.
 
-The contract is the ``backend-contract`` subtree of the ``volview`` package (its
-``fixtures/`` + ``generated/`` ship in the package's ``files``). It is the ONE
-normative source; the backend never keeps its own copy. The tests read it from
-wherever the ``volview`` dependency is installed:
+The contract is the ``backend-contract`` subtree of the installed ``volview``
+package and is the ONE normative source; the backend never keeps its own copy.
+``GIRDER_VOLVIEW_CONTRACT_DIR`` overrides the location. The chosen root must
+carry the ``generated/`` schemas or the import fails loudly — the conformance
+kit is a gate that must never silently self-skip.
 
-* CI / released backend: the pinned ``volview`` npm package
-  (``girder_volview/web_client/node_modules/volview``).
-* Local development against an unreleased VolView branch: ``npm link`` a local
-  VolView checkout into ``web_client`` (see ``README``), or point
-  ``GIRDER_VOLVIEW_CONTRACT_DIR`` straight at a checkout's ``backend-contract``.
-
-Resolution: ``GIRDER_VOLVIEW_CONTRACT_DIR`` (an escape hatch / explicit checkout)
-if set, else the installed package. The chosen root must carry the ``generated/``
-schemas or the import fails loudly — the conformance kit is a gate that must
-never silently self-skip.
-
-Pure stdlib (no girder import) so it loads without a running Girder/Mongo. This
-module only wires the loader; the conformance assertions that validate
-backend-emitted specs / intents / statuses against these fixtures + generated
-schemas live in the companion contract test modules.
+Pure stdlib (no girder import) so it loads without a running Girder/Mongo.
 """
 
 import json
@@ -30,8 +17,6 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parent
 
-# The ``volview`` package always ships ``backend-contract/`` (npm install OR
-# npm link); this is where npm places it under the girder web client.
 _INSTALLED_CONTRACT = (
     _REPO_ROOT
     / "girder_volview"
@@ -49,9 +34,8 @@ def _resolve_contract_root():
     """Locate the ``backend-contract`` tree, or fail with a fix-it message.
 
     Prefer an explicit ``GIRDER_VOLVIEW_CONTRACT_DIR`` override, else the
-    installed ``volview`` package. The chosen root must carry the ``generated/``
-    schemas -- a set-but-wrong override fails loud pointing at itself, never
-    silently falling back to the package.
+    installed ``volview`` package. A set-but-wrong override fails loud pointing
+    at itself, never silently falling back to the package.
     """
     env_dir = os.environ.get(_ENV_VAR)
     root = Path(env_dir).expanduser() if env_dir else _INSTALLED_CONTRACT

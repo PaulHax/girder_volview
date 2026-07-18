@@ -1,7 +1,3 @@
-# Ruff replaces the former flake8 + flake8-bugbear + flake8-docstrings +
-# flake8-quotes + pep8-naming stack (one fast tool, one config). Line length is
-# Ruff's stock 88 (E501 enforced; `ruff format` does the wrapping).
-
 # Build artifacts and vendored root-owned backups are not source.
 exclude = [
     ".eggs",
@@ -16,13 +12,10 @@ exclude = [
 
 [lint]
 # E/W = pycodestyle, F = pyflakes, B = flake8-bugbear, Q = flake8-quotes,
-# N = pep8-naming. Docstring rules (D, the old flake8-docstrings) are
-# intentionally NOT selected: the codebase never satisfied them and they were
-# ~64% of the pre-Ruff findings. Re-enable by adding "D" here plus a
-# [lint.pydocstyle] convention when the team wants to invest in docstrings.
+# N = pep8-naming. Docstring rules (D) are deliberately not selected: the
+# codebase does not satisfy them.
 select = ["E", "W", "F", "B", "Q", "N"]
 ignore = [
-    # pep8-naming exemptions carried over verbatim from the old flake8 config;
     # girder's API surface is intentionally CamelCase / mixedCase.
     "N802",  # function name should be lowercase
     "N803",  # argument name should be lowercase
@@ -34,7 +27,6 @@ ignore = [
 ]
 
 [lint.flake8-quotes]
-# The codebase is intentionally double-quoted.
 inline-quotes = "double"
 
 [lint.per-file-ignores]

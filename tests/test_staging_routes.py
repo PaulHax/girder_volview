@@ -1,19 +1,8 @@
-"""Server-fixture coverage for the staging endpoint + transient cleanup.
+"""Server-fixture coverage for the staging endpoint + transient cleanup, against
+real Girder models and the live cherrypy pipeline.
 
-What the offline ``test_transient_cleanup`` unit tests cannot show, exercised
-here against real Girder models + the live cherrypy pipeline:
-
-1. *Stage -> resolvable URI* -- a parent-bound multipart labelmap request
-   returns a backend-minted ``{uris}`` that resolves through the SAME own-scheme
-   path as any other input, and the created item is tagged transient.
-2. *Terminal cleanup* -- a staged input bound to a real job is deleted once that
-   job reaches a terminal state, via the real ``jobs.job.update.after`` handler.
-3. *Orphan sweep* -- a real Mongo age query: a staged item older than the TTL is
-   swept on the next staging call; a younger one is left alone.
-
-This needs a live pytest-girder server + Mongo; the module self-skips when the
-test Mongo is unreachable so the offline gate stays green, and runs (and must
-pass) wherever Mongo is present.
+Needs a live pytest-girder server + Mongo; the module self-skips when the test
+Mongo is unreachable so the offline gate stays green.
 """
 
 import datetime
@@ -25,11 +14,6 @@ import pytest
 
 from girder_volview.backend import inputs, routes, slicer_spec, submit
 from girder_volview.utils import makeFileDownloadUrl
-
-
-# ---------------------------------------------------------------------------
-# Self-skip when no live test Mongo is reachable
-# ---------------------------------------------------------------------------
 
 
 pytestmark = pytest.mark.skipif(
@@ -347,8 +331,8 @@ def test_staged_input_copied_per_job_and_copy_deleted_at_terminal(
 def test_concurrent_jobs_reusing_one_staged_input_do_not_interfere(
     server, owner, ownerFolder, realJobStub
 ):
-    # H-05 regression: two jobs bound to the SAME staged input. The first job
-    # reaching terminal must not delete anything the second job depends on.
+    # Two jobs bound to the SAME staged input: the first to reach terminal must
+    # not delete anything the second depends on.
     from girder.models.item import Item
     from girder_jobs.constants import JobStatus
     from girder_jobs.models.job import Job

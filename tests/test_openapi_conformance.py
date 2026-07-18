@@ -1,11 +1,9 @@
 """The published OpenAPI is the backend's obligation surface.
 
-The neutral REST OpenAPI (single-source-generated in VolView, read here from the
-`volview` package's backend-contract) states exactly what a NON-girder backend
-must implement. This is the backend-side half of the conformance kit: the contract
-document stays neutral (grep-tested for girder route/id/enum/URL leaks — AC1),
-declares exactly the neutral client-invoked operations, and the reference backend
-implements every one of them.
+The neutral REST OpenAPI (read from the `volview` package's backend-contract)
+states exactly what a NON-girder backend must implement: the document stays
+neutral (grep-tested for girder route/id/enum/URL leaks), declares exactly the
+neutral client-invoked operations, and the reference backend implements every one.
 
 Pure-stdlib (no server fixture / Mongo): it reads the contract JSON and checks
 the module-level handlers exist.
@@ -34,10 +32,8 @@ _OP_TO_HANDLER = {
     "cancelJob": "cancelJob",
 }
 
-# The declared-set mechanism: operations the contract declares whose backend
-# handlers have not landed yet -- counted in the exact operation surface,
-# excluded from the handler check. Empty; kept for the next contract-first
-# surface growth.
+# Operations the contract declares whose backend handlers have not landed:
+# counted in the exact operation surface, excluded from the handler check.
 _DECLARED_NOT_YET_IMPLEMENTED = frozenset()
 
 # The neutrality gate: none of these girder-specifics may appear in the neutral

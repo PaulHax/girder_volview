@@ -1,12 +1,11 @@
 """Every hand-authored OpenAPI ENVELOPE schema gets a validating consumer
 (no documentation-only schemas).
 
-``test_openapi_conformance`` guards the published document's neutrality + operation
-surface; this suite closes the remaining gap it leaves: the request/response
-envelope component schemas the client wraps the wire vocabulary in
-(``TaskSummary``, ``RunTaskRequest``, ``JobRef``, ``StageResponse`` — plus the
-``JobResults`` results envelope) had NO validating consumer. Each is now
-validated against REAL backend route payloads.
+``test_openapi_conformance`` guards the published document's neutrality +
+operation surface; this suite validates the request/response envelope component
+schemas the client wraps the wire vocabulary in (``TaskSummary``,
+``RunTaskRequest``, ``JobRef``, ``StageResponse``, ``JobResults``) against REAL
+backend route payloads.
 
 Single source: the envelope schemas are loaded from the SAME contract
 ``openapi.json`` under ``components.schemas`` (never hand-copied into this test),
@@ -44,8 +43,8 @@ def _envelope_validator(component_name):
     The whole OpenAPI document is the validation resource, and a top-level
     ``$ref`` targets the component; nested ``$ref``s (e.g. ``RunTaskRequest`` ->
     ``InputValue``, ``JobRef`` -> ``NeutralJobStatus``) resolve against the SAME
-    document. This loads the schema straight from the contract — it does
-    not hand-copy schema JSON (which would fork the single source).
+    document. Loads straight from the contract rather than hand-copying schema
+    JSON, which would fork the single source.
     """
     doc = _load_openapi()
     schema = dict(doc)
@@ -54,9 +53,9 @@ def _envelope_validator(component_name):
 
 
 # The hand-authored envelope schemas (openapi.ts `envelopeComponentSchemas`)
-# validated HERE, plus JobResults (the results envelope, a wire component
-# also read from openapi.json here). Every other published component is a wire
-# schema validated by its own conformance suite (see the audit test below).
+# validated HERE, plus the JobResults results envelope. Every other published
+# component is a wire schema validated by its own conformance suite (see the
+# audit test below).
 _ENVELOPES_VALIDATED_HERE = frozenset(
     {
         "TaskSummary",
@@ -68,8 +67,8 @@ _ENVELOPES_VALIDATED_HERE = frozenset(
 )
 
 # Wire components validated by the per-schema conformance suites over the SAME
-# generated schema that is injected into openapi.json (one normative def, two
-# validators). Kept here as the audit's other half so a newly published
+# generated schema injected into openapi.json (one normative def, two
+# validators). Listed here as the audit's other half so a newly published
 # component with NO consumer trips `test_every_openapi_component_...` below.
 _WIRE_COMPONENTS_VALIDATED_ELSEWHERE = {
     "InputValue": "test_input_value_resolution",
@@ -90,8 +89,8 @@ _WIRE_COMPONENTS_VALIDATED_ELSEWHERE = {
 
 
 def _stub_cli_item():
-    # A minimal stand-in for a slicer_cli_web CLIItem carrying exactly the members
-    # `_cliItemToSummary` reads, so the REAL builder produces the wire payload.
+    # Carries exactly the members `_cliItemToSummary` reads, so the REAL builder
+    # produces the wire payload.
     return types.SimpleNamespace(
         _id="6600000000000000000000f1",
         name="OtsuSegmentation",
@@ -120,9 +119,8 @@ def test_task_summary_requires_id_and_title():
 
 
 def test_run_task_request_with_input_and_scalars_validates():
-    # A realistic submission: an InputValue-bound input plus scalar/list/null
-    # params (ProcessingValue = InputValue | string | number | boolean | array |
-    # null). The InputValue member exercises the nested `$ref` resolution.
+    # ProcessingValue = InputValue | string | number | boolean | array | null.
+    # The InputValue member exercises the nested `$ref` resolution.
     input_value = contract_loader.load_fixture("wire/input-value.single-file.json")
     body = {
         "values": {
@@ -140,8 +138,8 @@ def test_run_task_request_with_input_and_scalars_validates():
 
 @pytest.mark.parametrize("body", [{}, {"values": {}}])
 def test_run_task_request_accepts_empty_submission(body):
-    # `values` is optional and an empty map is valid — a pre-upgrade / no-param
-    # submission stays compatible (additive rule).
+    # `values` is optional and an empty map is valid, so a no-param submission
+    # stays compatible (additive rule).
     _envelope_validator("RunTaskRequest").validate(body)
 
 
@@ -165,14 +163,13 @@ def test_run_task_request_rejects_unknown_top_level_member():
 
 
 def test_job_ref_bare_id_validates():
-    # The reference backend returns exactly `{jobId}` (runTask); `status` is the
-    # OPTIONAL born-terminal fast-path, so omitting it stays compatible.
+    # The reference backend returns exactly `{jobId}`; `status` is the OPTIONAL
+    # born-terminal fast-path, so omitting it stays compatible.
     _envelope_validator("JobRef").validate({"jobId": "6600000000000000000000d0"})
 
 
 def test_job_ref_with_born_terminal_status_validates():
-    # A synchronous backend may inline a terminal NeutralJobStatus; the nested
-    # `$ref` to NeutralJobStatus resolves against the same document.
+    # A synchronous backend may inline a terminal NeutralJobStatus.
     status = contract_loader.load_fixture("wire/status.success.json")
     _envelope_validator("JobRef").validate({"jobId": "job-1", "status": status})
 
@@ -189,7 +186,6 @@ def test_job_ref_requires_job_id():
 
 
 def test_stage_response_validates():
-    # The shape stageInput returns: the backend-minted opaque download URI(s).
     payload = {"uris": ["/api/v1/file/6600000000000000000000b1/proxiable/scan.nrrd"]}
     _envelope_validator("StageResponse").validate(payload)
 
@@ -204,14 +200,13 @@ def test_stage_response_empty_uris_is_rejected():
 
 # ---------------------------------------------------------------------------
 # JobResults — the getJobResults readiness envelope, validated against the
-# openapi-embedded copy. Each `intents` item is now the ONE canonical result-list
-# item (id/name/url required + optional/null metadata); there is no separate
-# hand-authored ResultListItem component.
+# openapi-embedded copy. Each `intents` item is the ONE canonical result-list
+# item: id/name/url required, plus optional/null metadata.
 # ---------------------------------------------------------------------------
 
 
-# The REAL backend results payload (mirrors _collectJobResults): each item is the
-# neutral intent carrying its required id + advisory mimeType/size metadata.
+# Mirrors _collectJobResults: each item is the neutral intent carrying its
+# required id + advisory mimeType/size metadata.
 _HYBRID_RESULTS_PAYLOAD = {
     "resultState": "incomplete",
     "intents": [
@@ -239,8 +234,8 @@ _HYBRID_RESULTS_PAYLOAD = {
 
 def test_job_results_envelope_validates_against_openapi_component():
     # The openapi-embedded JobResults is the SAME generated job-results schema
-    # (injected in openapi.ts); validating the real hybrid payload against the
-    # openapi copy confirms the published document carries a usable results schema.
+    # (injected in openapi.ts), so validating a real payload against the openapi
+    # copy confirms the published document carries a usable results schema.
     _envelope_validator("JobResults").validate(_HYBRID_RESULTS_PAYLOAD)
 
 
@@ -251,8 +246,7 @@ def test_job_results_missing_fixture_validates_against_openapi_component():
 
 def test_job_results_rejects_an_intents_item_without_id():
     # The canonical result-list item requires a nonempty id, so a bare intent
-    # (no id) inside `intents` fails — the OpenAPI half of "missing/empty id
-    # always fails" (the client wire parser rejects the same payload).
+    # inside `intents` fails here exactly as it does in the client wire parser.
     validator = _envelope_validator("JobResults")
     with pytest.raises(jsonschema.ValidationError):
         validator.validate(
@@ -265,14 +259,14 @@ def test_job_results_rejects_an_intents_item_without_id():
 
 
 # ---------------------------------------------------------------------------
-# The AC2 audit guard: EVERY published component has a validating consumer
+# Audit guard: EVERY published component has a validating consumer
 # ---------------------------------------------------------------------------
 
 
 def test_every_openapi_component_has_a_validating_consumer():
-    # Fail-closed drift guard (no documentation-only
-    # schemas): a newly published component with no validating consumer here or in
-    # a per-schema suite trips this assertion.
+    # Fail-closed drift guard (no documentation-only schemas): a newly published
+    # component with no validating consumer here or in a per-schema suite trips
+    # this assertion.
     published = set(_load_openapi()["components"]["schemas"])
     covered = _ENVELOPES_VALIDATED_HERE | set(_WIRE_COMPONENTS_VALIDATED_ELSEWHERE)
     assert published == covered, {

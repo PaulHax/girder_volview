@@ -72,7 +72,7 @@ wrap(HierarchyWidget, "render", function (render) {
 
     if (
         !this._showActions ||
-        // Can't open/save at root of Collections, for now.
+        // Can't open/save at the root of Collections.
         this.parentModel.attributes._modelType !== "folder"
     ) {
         return;
@@ -164,7 +164,6 @@ wrap(ItemListWidget, "render", function (render) {
         return;
     }
 
-    // check if child folders/items have loadable files
     const id = this.collection.params.folderId;
     const button = this.$el
         .closest(".g-hierarchy-widget")
@@ -174,15 +173,13 @@ wrap(ItemListWidget, "render", function (render) {
 
 ItemListWidget.registeredApplications['volview'] = {
     name: 'VolView',
-    // icon:
     check: (modelType, model, folder) => {
         if (modelType === 'item') {
             if (
                 model.get('name').endsWith('volview.zip') ||
                 model.get('name').endsWith('volview.json')
             ) {
-                // A session.volview.zip/json item is openable history: the item
-                // route opens it through as a saved session (restore).
+                // A session.volview.zip/json item opens as a saved session.
             } else {
                 try {
                     if (!model.get('meta') || !model.get('meta').dicom || model.get('meta').dicom.Modality === 'SM') {
