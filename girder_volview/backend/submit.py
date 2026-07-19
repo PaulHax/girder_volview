@@ -19,8 +19,8 @@ from .slicer_spec import (
 # slicer_cli_web's output-destination convention: for each output param the
 # submission carries a derived ``{param}_folder`` param naming the destination
 # folder. One symbol ties the server-side emit
-# (``_translateValuesToSlicerParams``) to the submit-time reject of any
-# client-supplied ``*_folder`` key (``_rejectReservedSubmitParams``).
+# (``_translateValuesToSlicerParams``) to the submit-time reject of a
+# client-supplied colliding key (``_rejectSynthesizedFolderParams``).
 _OUTPUT_FOLDER_SUFFIX = "_folder"
 
 
@@ -315,27 +315,40 @@ def _autofillOutputs(values, outputs, cli_name):
 
 
 def _rejectReservedSubmitParams(values):
-    """Fail closed on a submission that smuggles reserved/undeclared params.
+    """Fail closed on a submission that smuggles reserved credential params.
 
     A separate submit-time defense from the spec-side drop
     (``slicer_spec._RESERVED_INPUT_PARAMS``): the translator never *emits* these
     to the client form, and this rejects a hand-crafted submit that tries to feed
-    them back in. Screens the RAW client-submitted keys —
-    before the backend derives any ``{param}_folder`` output-destination param — so
-    it never trips over the backend's own output plumbing. Rejects, never strips.
-
-    - ``girderApiUrl`` / ``girderToken``: ``slicer_cli_web``'s injected
-      credentials; a client value would try to redirect the CLI's girder client
-      or swap out its token.
-    - ``*_folder``: the backend synthesizes ``{param}_folder`` server-side
-      (``_translateValuesToSlicerParams``); the client never declares one, so any
-      ``*_folder`` in the raw submission is undeclared and rejected.
+    them back in. ``girderApiUrl`` / ``girderToken`` are ``slicer_cli_web``'s
+    injected credentials; a client value would try to redirect the CLI's girder
+    client or swap out its token. Screens the RAW client-submitted keys before
+    any task lookup. Rejects, never strips.
     """
-    offending = sorted(
-        key
-        for key in (values or {})
-        if key in _RESERVED_INPUT_PARAMS or key.endswith(_OUTPUT_FOLDER_SUFFIX)
-    )
+    offending = sorted(key for key in (values or {}) if key in _RESERVED_INPUT_PARAMS)
+    if offending:
+        raise RestException(
+            "Reserved parameter(s) may not be submitted: %s" % ", ".join(offending),
+            code=400,
+        )
+
+
+def _rejectSynthesizedFolderParams(values, declared):
+    """Fail closed on a raw key that collides with a synthesized folder param.
+
+    The backend derives ``{output}_folder`` output-destination params server-side
+    (``_translateValuesToSlicerParams``); a client-submitted collision would try
+    to redirect where an output is written. Only names the translator actually
+    synthesizes are reserved — a CLI is free to declare its own ``*_folder``
+    param, and any *undeclared* ``*_folder`` key already dies in
+    ``_rejectUndeclaredSubmitParams``. Rejects, never strips.
+    """
+    synthesized = {
+        name + _OUTPUT_FOLDER_SUFFIX
+        for name, decl in (declared or {}).items()
+        if decl.get("channel") == "output" and decl.get("tag") in ("image", "file")
+    }
+    offending = sorted(key for key in (values or {}) if key in synthesized)
     if offending:
         raise RestException(
             "Reserved parameter(s) may not be submitted: %s" % ", ".join(offending),
@@ -350,9 +363,10 @@ def _rejectUndeclaredSubmitParams(values, declared):
     as parameters. A hand-crafted payload smuggling an undeclared key (a typo, a
     probe, or a client-authored output structure under an unknown name) is rejected
     here with a clear 400 rather than silently ignored or 500-ing downstream. The
-    reserved-param screen (``_rejectReservedSubmitParams``) runs first, so
-    ``girderApiUrl``/``girderToken`` and ``*_folder`` keys take that typed rejection
-    even though the CLI declares the credential params in its XML.
+    reserved-param screens (``_rejectReservedSubmitParams``,
+    ``_rejectSynthesizedFolderParams``) run first, so
+    ``girderApiUrl``/``girderToken`` and synthesized-folder collisions take that
+    typed rejection even though the CLI declares the credential params in its XML.
 
     ``declared`` is the ``slicer_spec.declared_params`` mapping ``runTask`` parsed
     once; its key set is exactly the accepted names.
@@ -517,6 +531,29 @@ def _validateDeclaredSubmitValues(values, declared):
     if problems:
         raise RestException(
             "Invalid value for declared parameter(s): %s" % "; ".join(problems),
+            code=400,
+        )
+
+
+def _rejectMissingRequiredParams(values, declared):
+    """Fail closed (400) when a required (indexed) param is absent or ``None``.
+
+    Declared outputs are exempt: ``_autofillOutputs`` composes any output the
+    user leaves unfilled. Without this guard a missing positional input passes
+    both key screens (they inspect only present, non-``None`` keys) and the job
+    dies inside the container with a cryptic argparse error instead of a
+    boundary 400 naming the parameter.
+    """
+    missing = sorted(
+        name
+        for name, decl in (declared or {}).items()
+        if decl.get("required")
+        and decl.get("channel") != "output"
+        and (values or {}).get(name) is None
+    )
+    if missing:
+        raise RestException(
+            "Missing required parameter(s): %s" % ", ".join(missing),
             code=400,
         )
 

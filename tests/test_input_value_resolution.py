@@ -565,11 +565,40 @@ def test_reject_reserved_credential_param(reservedKey):
     assert exc.value.code == 400
 
 
-@pytest.mark.parametrize("folderKey", ["outputVolume_folder", "_folder", "x_folder"])
-def test_reject_undeclared_output_folder_param(folderKey):
+def test_reject_synthesized_output_folder_collision():
+    # The backend synthesizes outputVolume_folder for the declared output; a
+    # raw submission of that key would redirect where the output is written.
+    declared = {"outputVolume": {"channel": "output", "tag": "image"}}
     with pytest.raises(RestException) as exc:
-        submit._rejectReservedSubmitParams({folderKey: "someid"})
+        submit._rejectSynthesizedFolderParams(
+            {"outputVolume_folder": "someid"}, declared
+        )
     assert exc.value.code == 400
+
+
+@pytest.mark.parametrize("folderKey", ["_folder", "x_folder"])
+def test_undeclared_folder_suffix_param_still_rejected(folderKey):
+    # A *_folder key that collides with nothing synthesized is not reserved,
+    # but it is undeclared — the undeclared screen still 400s it.
+    declared = {"outputVolume": {"channel": "output", "tag": "image"}}
+    assert (
+        submit._rejectSynthesizedFolderParams({folderKey: "someid"}, declared) is None
+    )
+    with pytest.raises(RestException) as exc:
+        submit._rejectUndeclaredSubmitParams({folderKey: "someid"}, declared)
+    assert exc.value.code == 400
+
+
+def test_declared_folder_suffix_param_is_submittable():
+    # A CLI may legitimately declare its own *_folder param (e.g. a <directory>
+    # input named atlas_folder); only synthesized names are reserved.
+    declared = {
+        "atlas_folder": {"channel": "input", "tag": "directory"},
+        "outputVolume": {"channel": "output", "tag": "image"},
+    }
+    values = {"atlas_folder": "some-directory"}
+    assert submit._rejectSynthesizedFolderParams(values, declared) is None
+    assert submit._rejectUndeclaredSubmitParams(values, declared) is None
 
 
 @pytest.mark.parametrize(

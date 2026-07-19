@@ -13,6 +13,7 @@ import copy
 import datetime
 import json
 import threading
+import time
 import uuid
 
 import cherrypy
@@ -243,23 +244,35 @@ def _jobsContainerFolder(launchFolder, user):
     marker is stamped ONLY on a folder this call itself created: ``createFolder``
     never reuses (name-collision raises ``ValidationException``), so a folder
     someone else made in the check-create window re-runs the marker check instead
-    of being adopted. Its ACL is the launch folder's (copied by ``createFolder``):
+    of being adopted. Create and stamp are two writes, so an unmarked collision
+    gets a short grace period (a concurrent submission's container between its
+    create and its stamp) before the 409, and a failed stamp removes the created
+    folder rather than leave an unmarked container that would 409 every future
+    submission. Its ACL is the launch folder's (copied by ``createFolder``):
     collaborators may see the container, but each per-job folder inside keeps its
     submitter-only ACL.
     """
 
-    def existingContainer():
-        existing = Folder().findOne(
+    def findContainer():
+        return Folder().findOne(
             {
                 "parentId": launchFolder["_id"],
                 "parentCollection": "folder",
                 "name": JOBS_CONTAINER_NAME,
             }
         )
-        if existing is None:
-            return None
-        if (existing.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY):
-            return existing
+
+    def isMarked(folderDoc):
+        return bool((folderDoc.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY))
+
+    def awaitMarkedContainer():
+        """The existing marked container, ``None`` when absent, or a 409 for an
+        unmarked collision that outlasts the create->stamp grace period."""
+        for _ in range(10):
+            existing = findContainer()
+            if existing is None or isMarked(existing):
+                return existing
+            time.sleep(0.05)
         raise RestException(
             "A folder named '%s' already exists here and is not a processing "
             "jobs container; rename or remove it to run processing tasks"
@@ -267,7 +280,7 @@ def _jobsContainerFolder(launchFolder, user):
             code=409,
         )
 
-    container = existingContainer()
+    container = awaitMarkedContainer()
     if container is not None:
         return container
     try:
@@ -282,11 +295,15 @@ def _jobsContainerFolder(launchFolder, user):
         # Lost a creation race: a same-named sibling appeared between the check
         # and the create. Re-run the marker check -- a concurrent submission's
         # container is reused; a user's folder 409s (never adopted).
-        container = existingContainer()
+        container = awaitMarkedContainer()
         if container is None:
             raise
         return container
-    return Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
+    try:
+        return Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
+    except Exception:
+        Folder().remove(created)
+        raise
 
 
 def _createJobOutputFolder(launchFolder, user, submissionId):
@@ -449,8 +466,8 @@ def runTask(self, folder, taskId, body):
     if not isinstance(values, dict):
         raise RestException("values must be an object of parameter values", code=400)
 
-    # Reject a payload carrying reserved credentials or an undeclared
-    # output-folder param before any task lookup or work.
+    # Reject a payload carrying reserved credentials before any task lookup or
+    # work; declaration-aware screens run after the CLI XML is parsed below.
     submit._rejectReservedSubmitParams(values)
 
     if not submit._slicerCliAvailable():
@@ -469,10 +486,13 @@ def runTask(self, folder, taskId, body):
     outputSpecs = parsedCli["outputs"]
 
     # Screens the RAW client keys, so it must run before autofill adds
-    # server-owned output structures. An undeclared key or an out-of-declaration
-    # value is a boundary 400 naming the parameter, not a later job failure.
+    # server-owned output structures. A synthesized-folder collision, an
+    # undeclared key, an out-of-declaration value, or a missing required input
+    # is a boundary 400 naming the parameter, not a later job failure.
+    submit._rejectSynthesizedFolderParams(values, declared)
     submit._rejectUndeclaredSubmitParams(values, declared)
     submit._validateDeclaredSubmitValues(values, declared)
+    submit._rejectMissingRequiredParams(values, declared)
 
     # Auto-generate a deterministic output filename for any output param the user
     # didn't fill (input file + CLI name + parameter name + extension). Names need

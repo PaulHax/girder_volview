@@ -27,17 +27,19 @@ from .backend.launch import (
     saveToItem,
     saveToFolder,
 )
-from .utils import isLoadableFile
+from .utils import isLoadableImage, isSessionFile
 
 
 def hasLoadableFile(files, user=None):
+    # Mirror what the launch manifest would actually resolve: a session file
+    # opens through (restore), and anything else must be a loadable image that
+    # is not working data (job outputs, transient staged inputs) — otherwise
+    # the Open-in-VolView button would launch an empty viewer.
     itemCache = {}
+    folderCache = {}
     for fileEntry in files:
-        if isLoadableFile(
-            fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry,
-            user,
-            itemCache,
-        ):
+        file = fileEntry[1] if isinstance(fileEntry, tuple) else fileEntry
+        if isSessionFile(file) or isLoadableImage(file, user, itemCache, folderCache):
             return True
     return False
 

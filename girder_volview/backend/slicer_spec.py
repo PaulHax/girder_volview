@@ -139,7 +139,12 @@ def _parse_param(param_el, section):
     tag = param_el.tag
     widget = _widget_type(tag)
     channel = "output" if _child_text(param_el, "channel") == "output" else "input"
-    param_id = _child_text(param_el, "name") or _child_text(param_el, "longflag")
+    # ctk_cli identifies a <name>-less param by its longflag with leading dashes
+    # stripped; slicer_cli_web binds submitted args by that identifier, so the
+    # id must match or the submitted value is silently ignored.
+    param_id = _child_text(param_el, "name") or _child_text(
+        param_el, "longflag"
+    ).lstrip("-")
     required = len(_child_text(param_el, "index")) > 0
     values = None
     if widget in ("string-enumeration", "number-enumeration"):
@@ -276,9 +281,9 @@ def declared_params(xml_text):
     Each entry carries what submit-time value validation needs, projected from the
     same ``_parse_param`` walk the ordered spec path uses so the two surfaces never
     drift: ``tag`` (the raw Slicer element), ``widget`` (its ``_TYPE_MAP`` type),
-    ``channel``, ``constraints`` (``{min,max,step}``) and ``options`` (converted
-    enumeration members, or ``None``). Tolerant: an unparseable document declares
-    nothing.
+    ``channel``, ``constraints`` (``{min,max,step}``), ``options`` (converted
+    enumeration members, or ``None``) and ``required`` (the param is indexed).
+    Tolerant: an unparseable document declares nothing.
     """
     try:
         root = ET.fromstring(xml_text or "")
@@ -300,6 +305,9 @@ def declared_params(xml_text):
                 "constraints": parsed["constraints"],
                 # ``_parse_param`` fills ``values`` only for enum widgets.
                 "options": parsed["values"],
+                # Indexed (positional) params are required on the CLI command
+                # line; the submit boundary enforces presence for inputs.
+                "required": parsed["required"],
             }
     return params
 

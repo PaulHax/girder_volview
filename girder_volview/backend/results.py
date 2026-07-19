@@ -127,7 +127,9 @@ def _progressRatio(job):
         return None
     try:
         ratio = float(progress["current"]) / float(progress["total"])
-    except (TypeError, ZeroDivisionError):
+    except (TypeError, ValueError, ZeroDivisionError):
+        # ValueError: updateJob stores whatever a writer PUT — a non-numeric
+        # current/total string must not 500 the whole history page.
         return None
     return min(1.0, max(0.0, ratio))
 

@@ -1,5 +1,8 @@
+import json
+
 from datetime import datetime, timezone
 from girder import logger
+from girder.exceptions import RestException
 from girder.utility.server import getApiRoot
 from girder.constants import AccessType
 from girder.models.folder import Folder
@@ -514,7 +517,12 @@ def getFilteredFiles(folder, filters):
     in items in the folder or any of its sub-folders that match the filter.
     Accepts a single filter dict or a list of dicts (OR-unioned).
     """
-    filtersList = _promoteFilterToList(filters) or []
+    filtersList = _promoteFilterToList(filters)
+    if filtersList is None:
+        # A malformed filter (e.g. a list with a non-dict member) must fail
+        # loudly: degrading to an empty $match would load EVERY item in the
+        # folder tree instead of the filtered selection.
+        raise RestException("filters must be a JSON object or array of objects")
     if len(filtersList) > 1:
         itemMatch = {"$or": filtersList}
     elif filtersList:
@@ -576,7 +584,11 @@ def filterMatchesSession(rowFilter, sessionFilter):
         return False
 
     def canon(filterDict):
-        return tuple(sorted(filterDict.items()))
+        # Canonical JSON string, not a tuple of items: filter values can mix
+        # types under one key (dicom.py coerces numeric DICOM values to int,
+        # so int/str mixes are real) or nest dicts (Mongo operators), and
+        # sorting raw tuples of such values raises TypeError.
+        return json.dumps(filterDict, sort_keys=True, default=str)
 
     return sorted(map(canon, rowList)) == sorted(map(canon, sessionList))
 

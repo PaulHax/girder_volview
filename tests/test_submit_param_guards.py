@@ -379,3 +379,57 @@ def test_region_bounds_fail_closed_on_malformed_box():
             )
         assert exc.value.code == 400
         assert "roi" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Required (indexed) params -- presence enforced at the boundary
+# ---------------------------------------------------------------------------
+
+_INDEXED_CLI_XML = (
+    '<?xml version="1.0"?>'
+    "<executable><category>Radiology</category><title>Median</title><parameters>"
+    "<label>IO</label>"
+    "<image><name>inputVolume</name><channel>input</channel><index>0</index></image>"
+    "<double><name>threshold</name><longflag>threshold</longflag></double>"
+    '<image type="label"><name>outputVolume</name><channel>output</channel>'
+    "<index>1</index></image>"
+    "</parameters></executable>"
+)
+
+_INDEXED_DECLARED = slicer_spec.declared_params(_INDEXED_CLI_XML)
+
+
+def test_declared_params_strips_longflag_dashes():
+    # ctk_cli identifies a <name>-less param by its dash-stripped longflag;
+    # a divergent id would make slicer_cli_web silently ignore the submitted
+    # value and run the CLI with the XML default.
+    xml = (
+        '<?xml version="1.0"?>'
+        "<executable><parameters><label>IO</label>"
+        "<double><longflag>--radius</longflag></double>"
+        "</parameters></executable>"
+    )
+    declared = slicer_spec.declared_params(xml)
+    assert "radius" in declared
+    assert "--radius" not in declared
+
+
+def test_missing_required_input_is_rejected():
+    with pytest.raises(RestException) as exc:
+        submit._rejectMissingRequiredParams({}, _INDEXED_DECLARED)
+    assert exc.value.code == 400
+    assert "inputVolume" in str(exc.value)
+
+
+def test_none_valued_required_input_is_rejected():
+    with pytest.raises(RestException) as exc:
+        submit._rejectMissingRequiredParams({"inputVolume": None}, _INDEXED_DECLARED)
+    assert exc.value.code == 400
+
+
+def test_required_output_and_optional_input_are_exempt():
+    # outputVolume is indexed but server-composed (_autofillOutputs), and the
+    # un-indexed threshold is optional; only required non-output params must
+    # arrive from the client.
+    values = {"inputVolume": {"type": "image", "uris": ["girder://x"]}}
+    assert submit._rejectMissingRequiredParams(values, _INDEXED_DECLARED) is None

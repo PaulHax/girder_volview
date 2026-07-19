@@ -108,3 +108,25 @@ def test_order_independent():
         [{"meta.dicom.StudyInstanceUID": "A"}, {"meta.dicom.StudyInstanceUID": "B"}],
         [{"meta.dicom.StudyInstanceUID": "B"}, {"meta.dicom.StudyInstanceUID": "A"}],
     )
+
+
+def test_mixed_type_values_compare_without_error():
+    # dicom.py coerces numeric DICOM values to int, so an int/str mix under one
+    # key is real; canonical ordering must not raise TypeError (raw tuple
+    # sorting would compare 3 < "3A").
+    assert filterMatchesSession(
+        [{"meta.dicom.SeriesNumber": 3}, {"meta.dicom.SeriesNumber": "3A"}],
+        [{"meta.dicom.SeriesNumber": "3A"}, {"meta.dicom.SeriesNumber": 3}],
+    )
+    assert not filterMatchesSession(
+        [{"meta.dicom.SeriesNumber": 3}, {"meta.dicom.SeriesNumber": "3A"}],
+        [{"meta.dicom.SeriesNumber": "3A"}],
+    )
+
+
+def test_operator_dict_values_compare_without_error():
+    # Mongo-operator (nested dict) values are unorderable as raw tuples too.
+    assert filterMatchesSession(
+        [{"a": {"$in": [1, 2]}}, {"a": 1}],
+        [{"a": 1}, {"a": {"$in": [1, 2]}}],
+    )
