@@ -214,13 +214,39 @@ echo "==> [1/6] backend: mount $GIRDER_WT ($GIRDER_SHORT) at /opt/girder_volview
 compose up -d --no-recreate
 compose up -d --force-recreate --no-deps girder
 
-echo "==> [2/6] waiting for girder health at $GIRDER_URL"
+# A recreate reprovisions from scratch: the DSA provision file pip-installs
+# SimpleITK plus three packages straight from git, which clone and build inside
+# the container. This is by far the slowest thing in this script — measured at
+# ~1595s (~27 min) on a normal connection, with GitHub responding in ~1s, so it
+# is throughput and building, not a network fault. The previous 900s ceiling was
+# not close, and failed as "girder never came up" while provisioning was fine.
+# The default below is that measurement plus real headroom; a slow day should
+# not need a flag.
+#
+# Two failure modes to tell apart, because they want opposite responses: still
+# provisioning (wait) versus the container exited (stop). Polling the API alone
+# cannot distinguish them, so check the container too and report progress rather
+# than sitting silent for half an hour.
+GIRDER_WAIT_SECS=${GIRDER_WAIT_SECS:-2700}
+echo "==> [2/6] waiting up to ${GIRDER_WAIT_SECS}s for girder health at $GIRDER_URL"
 up=
-for _ in $(seq 1 450); do
+waited=0
+while [ "$waited" -lt "$GIRDER_WAIT_SECS" ]; do
     if curl -sf -o /dev/null "$GIRDER_URL/api/v1/system/version"; then up=1; break; fi
-    sleep 2
+    if ! compose ps --status running --format '{{.Service}}' 2>/dev/null | grep -qx girder; then
+        echo "    !! the girder container is no longer running (exited after ${waited}s)" >&2
+        echo "       docker compose -p $DSA_COMPOSE_PROJECT logs --tail 50 girder" >&2
+        exit 1
+    fi
+    sleep 5; waited=$((waited + 5))
+    [ $((waited % 60)) -eq 0 ] && echo "    ... still provisioning (${waited}s)"
 done
-[ -n "$up" ] || { echo "    !! girder never came up at $GIRDER_URL" >&2; exit 1; }
+[ -n "$up" ] || {
+    echo "    !! girder did not answer within ${GIRDER_WAIT_SECS}s at $GIRDER_URL" >&2
+    echo "       It may still be provisioning — check with:" >&2
+    echo "         docker compose -p $DSA_COMPOSE_PROJECT logs --tail 20 girder" >&2
+    echo "       and re-run with a longer budget: GIRDER_WAIT_SECS=3600 $0 ..." >&2
+    exit 1; }
 GIRDER=$(compose ps -q girder)
 [ -n "$GIRDER" ] || { echo "    !! could not resolve the girder container" >&2; exit 1; }
 
