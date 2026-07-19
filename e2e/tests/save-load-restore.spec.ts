@@ -100,13 +100,25 @@ test.describe('save/load/restore F5 lifecycle', () => {
         expect(isSessionManifest(m4), `resume manifest should name the saved session: ${resourceNames(m4)}`).toBeTruthy();
       }
 
-      if (gesture === 'checked' || gesture === 'filter') {
+      if (gesture === 'filter') {
         const reopened = await page.context().newPage();
         const reopenedManifest = await gotoCapturingManifest(reopened, url);
         expect(
           isSessionManifest(reopenedManifest),
           `reopening ${gesture} should resume matching work: ${resourceNames(reopenedManifest)}`
         ).toBeTruthy();
+        await reopened.close();
+      }
+      if (gesture === 'checked') {
+        // Checking raw images is the "start fresh" gesture even when exactly
+        // this selection was just saved: resume rides only on the repointed
+        // resumeUrl (F5 above) — never on a new checked launch.
+        const reopened = await page.context().newPage();
+        const reopenedManifest = await gotoCapturingManifest(reopened, url);
+        expect(
+          isSessionManifest(reopenedManifest),
+          `reopening checked raw picks must start fresh: ${resourceNames(reopenedManifest)}`
+        ).toBeFalsy();
         await reopened.close();
       }
 
@@ -120,6 +132,46 @@ test.describe('save/load/restore F5 lifecycle', () => {
       expect(urlsParam(page), 'F5 after the second save must stay on the second resumeUrl').toBe(resumeUrl2);
     });
   }
+
+  test('fresh restart via checked raw images: starts clean, then F5 resumes the NEW save', async ({ page }, info) => {
+    // The user's "start over" workflow: an older save exists, they check the
+    // raw images to restart clean, annotate, save, and F5 must reload the NEW
+    // save (via the repointed resumeUrl) — not the older session, not fresh.
+    const checked = launchUrl(g, 'checked');
+
+    // Seed the older session.
+    await gotoCapturingManifest(page, checked.url);
+    const olderResume = await remoteSave(page);
+    expect(olderResume, 'seeding save carried no resumeUrl').toBeTruthy();
+
+    // Fresh restart: re-launching the checked raw images ignores the older save.
+    const m1 = await gotoCapturingManifest(page, checked.url);
+    await shot(page, info, 'restart-1-fresh-despite-older-save');
+    expect(urlsParam(page), 'checked raw restart must open fresh').toBe(checked.freshManifest);
+    if (m1) {
+      expect(
+        isSessionManifest(m1),
+        `restart must not resume the older save: ${resourceNames(m1)}`
+      ).toBeFalsy();
+    }
+
+    // Save the restarted session (the annotate-then-save gesture).
+    const newResume = await remoteSave(page);
+    await shot(page, info, 'restart-2-after-save');
+    expect(newResume, 'restart save carried no resumeUrl').toBeTruthy();
+    expect(newResume, 'the new save must mint its own session item').not.toBe(olderResume);
+
+    // F5 picks up the LATEST save.
+    const m2 = await reloadCapturingManifest(page);
+    await shot(page, info, 'restart-3-f5-resumes-new-save');
+    expect(urlsParam(page), 'F5 must reload the new save, not the older one').toBe(newResume);
+    if (m2) {
+      expect(
+        isSessionManifest(m2),
+        `F5 should load the saved session: ${resourceNames(m2)}`
+      ).toBeTruthy();
+    }
+  });
 
   test('bare folder-open resumes the newest session (after a folder-scoped save)', async ({ page }, info) => {
     // Guarantee a session exists in the folder: launch the checked gesture and save.
