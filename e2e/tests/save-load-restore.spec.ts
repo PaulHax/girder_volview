@@ -100,25 +100,20 @@ test.describe('save/load/restore F5 lifecycle', () => {
         expect(isSessionManifest(m4), `resume manifest should name the saved session: ${resourceNames(m4)}`).toBeTruthy();
       }
 
-      if (gesture === 'filter') {
+      if (gesture === 'filter' || gesture === 'checked') {
+        // Reopening the launch URL in a fresh page: a filter pick resumes its
+        // matching save, but checking raw images is the "start fresh" gesture
+        // even when exactly this selection was just saved — resume rides only
+        // on the repointed resumeUrl (F5 above), never on a new checked launch.
+        const shouldResume = gesture === 'filter';
         const reopened = await page.context().newPage();
         const reopenedManifest = await gotoCapturingManifest(reopened, url);
         expect(
           isSessionManifest(reopenedManifest),
-          `reopening ${gesture} should resume matching work: ${resourceNames(reopenedManifest)}`
-        ).toBeTruthy();
-        await reopened.close();
-      }
-      if (gesture === 'checked') {
-        // Checking raw images is the "start fresh" gesture even when exactly
-        // this selection was just saved: resume rides only on the repointed
-        // resumeUrl (F5 above) — never on a new checked launch.
-        const reopened = await page.context().newPage();
-        const reopenedManifest = await gotoCapturingManifest(reopened, url);
-        expect(
-          isSessionManifest(reopenedManifest),
-          `reopening checked raw picks must start fresh: ${resourceNames(reopenedManifest)}`
-        ).toBeFalsy();
+          shouldResume
+            ? `reopening ${gesture} should resume matching work: ${resourceNames(reopenedManifest)}`
+            : `reopening checked raw picks must start fresh: ${resourceNames(reopenedManifest)}`
+        ).toBe(shouldResume);
         await reopened.close();
       }
 

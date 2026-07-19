@@ -235,27 +235,24 @@ def copyStagedInputsIntoJobFolder(params, resolvedInputFiles, user, outputFolder
         copiedItemIds.append(str(copied["_id"]))
         # Copied files preserve their names; sorting both sides by name pairs
         # each original file with its copy regardless of the underlying cursor
-        # order. strict: copyItem duplicates every child file, so a length
-        # mismatch means a broken copy — fail the submit loudly rather than run
-        # the job against a partial input.
+        # order. copyItem duplicates every child file, so a length mismatch
+        # means the staged item's files changed between resolution and copy —
+        # the same race as the concurrent-delete guard above, and the same
+        # typed 409 rather than running the job against a partial input.
         originals = sorted(Item().childFiles(item), key=lambda f: f.get("name", ""))
         copies = sorted(Item().childFiles(copied), key=lambda f: f.get("name", ""))
-        try:
-            fileIdRemap.update(
-                {
-                    str(orig["_id"]): str(cop["_id"])
-                    for orig, cop in zip(originals, copies, strict=True)
-                }
-            )
-        except ValueError:
-            # Same race as the concurrent-delete guard above: the staged item's
-            # files changed between resolution and copy. A typed 409, not the
-            # bare zip() ValueError's opaque 500.
+        if len(originals) != len(copies):
             raise RestException(
                 "A processing input changed while the submission "
                 "was in progress; please resubmit",
                 code=409,
-            ) from None
+            )
+        fileIdRemap.update(
+            {
+                str(orig["_id"]): str(cop["_id"])
+                for orig, cop in zip(originals, copies, strict=True)
+            }
+        )
     if not fileIdRemap:
         return params, copiedItemIds
     params = dict(params)

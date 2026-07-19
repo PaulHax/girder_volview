@@ -281,13 +281,14 @@ def test_submit_reuses_resolved_files_for_params_and_transient_detection(monkeyp
 def test_integral_float_translates_to_canonical_int_form():
     # Validation accepts 5.0 for an <integer> param (JSON has no int/float
     # split), so translation must emit "5", not "5.0" — the CLI's argparse
-    # int()/enum parsing rejects the float string. Fractionals pass through.
+    # int()/enum parsing rejects the float string. Same per vector element;
+    # fractionals pass through.
     params, _ = submit._translateValuesToSlicerParams(
-        {"iterations": 5.0, "sigma": 2.5},
+        {"iterations": 5.0, "sigma": 2.5, "radii": [5.0, 2.5]},
         user=object(),
         outputFolder={"_id": ObjectId()},
     )
-    assert params == {"iterations": "5", "sigma": "2.5"}
+    assert params == {"iterations": "5", "sigma": "2.5", "radii": "5,2.5"}
 
 
 def test_reserved_char_named_input_translates_without_400(monkeypatch):

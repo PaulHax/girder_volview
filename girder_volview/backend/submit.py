@@ -258,17 +258,24 @@ def _firstInputBaseName(values):
     return "output"
 
 
+# The ProcessingOutputRequest wire shape: the server owns ``name``
+# (``_autofillOutputs`` overwrites it); ``format`` is the one client-chosen key.
+_OUTPUT_REQUEST_KEYS = frozenset({"name", "format"})
+
+
 def _autofillOutputs(values, outputs, cli_name):
     """Generate the SERVER-OWNED name for every declared output param.
 
     The output filename is server-owned, never client-selected: a client-supplied
     ``name`` such as ``../../../../etc/passwd`` would be a worker-host
     path-traversal vector, so this ALWAYS overwrites ``name`` with the
-    deterministic server-side value and discards any client-supplied one. Any
-    OTHER keys on an existing output dict value are merged through; only ``name``
-    is normative and server-owned. Mutates and returns `values`; output param
-    values become `ProcessingOutputRequest`-style dicts: `{"name": "<candidate>",
-    ...}`.
+    deterministic server-side value and discards any client-supplied one. Only
+    the other ``_OUTPUT_REQUEST_KEYS`` on an existing output dict value are
+    merged through — the merge is what rides into the job's recorded submission,
+    so it never propagates a key the wire shape doesn't own (validation already
+    400s unknown keys with a message naming them). Mutates and returns `values`;
+    output param values become `ProcessingOutputRequest`-style dicts:
+    `{"name": "<candidate>", ...}`.
 
     The name is deterministic (`<input>.<cli>.<param><ext>`) and NOT uniquified:
     outputs bind to the job by reference (`_recordJobOutput`), never by filename,
@@ -286,9 +293,14 @@ def _autofillOutputs(values, outputs, cli_name):
         candidate = _candidateOutputName(inputBase, cli_name, out["name"], ext)
         new_value = {"name": candidate}
         if isinstance(existing, dict):
-            # Merge any other client-supplied keys but never the name: the name is
-            # server-owned and overwritten unconditionally above.
-            new_value.update({k: v for k, v in existing.items() if k != "name"})
+            # Merge only the client-owned wire keys, never the server-owned name.
+            new_value.update(
+                {
+                    k: v
+                    for k, v in existing.items()
+                    if k in _OUTPUT_REQUEST_KEYS and k != "name"
+                }
+            )
         values[out["name"]] = new_value
     return values
 
@@ -392,8 +404,9 @@ def _rangeProblem(value, constraints):
 
 
 def _formatNumber(value):
-    # Render an integral float as its int form (50.0 -> "50") in 400 messages;
-    # bools and genuine fractionals pass through untouched.
+    # Render an integral float as its int form (50.0 -> "50") in 400 messages
+    # and CLI param strings; bools, strings, and genuine fractionals pass
+    # through untouched.
     return str(_json_number(value))
 
 
@@ -460,24 +473,16 @@ def _scalarProblem(decl, value):
     return None
 
 
-# The ProcessingOutputRequest wire shape: the server owns ``name``
-# (``_autofillOutputs`` overwrites it); ``format`` is the one client-chosen key.
-_OUTPUT_REQUEST_KEYS = frozenset({"name", "format"})
-
-
 def _submitValueProblem(decl, value):
     """Why a submitted value mismatches its CLI declaration, or None."""
-    # Declared image/file OUTPUTS are server-composed: the name is overwritten by
-    # ``_autofillOutputs`` and a folderRef is rejected in translation, but an
-    # object carrying ``uris`` would merge through autofill and shape-match the
-    # translator's INPUT branch — reject it here.
+    # Declared image/file OUTPUTS are server-composed: the name is overwritten
+    # and unknown keys are dropped by ``_autofillOutputs``, and a folderRef is
+    # rejected in translation. Reject the same shapes here so the submitter gets
+    # a boundary 400 naming the problem instead of a silently pruned value.
     if decl["channel"] == "output" and decl["tag"] in ("image", "file"):
-        if isinstance(value, dict) and "uris" in value:
-            return "output values may not carry uris (outputs are server-composed)"
         if isinstance(value, dict):
-            # ``_autofillOutputs`` merges every non-name key into the job's
-            # recorded submission, so an unvetted key would ride into the job
-            # document (where a '.'/'$' name breaks the Mongo insert).
+            if "uris" in value:
+                return "output values may not carry uris (outputs are server-composed)"
             unknown = sorted(set(value) - _OUTPUT_REQUEST_KEYS)
             if unknown:
                 return "unexpected output key(s): %s" % ", ".join(unknown)
@@ -599,7 +604,9 @@ def _translateValuesToSlicerParams(values, user, outputFolder, declared=None):
         elif isinstance(value, str):
             params[paramName] = value
         elif isinstance(value, list):
-            params[paramName] = ",".join(str(v) for v in value)
+            # Same canonical int form per element: validation accepts 5.0 for an
+            # <integer-vector> element, but the CLI would reject "5.0".
+            params[paramName] = ",".join(_formatNumber(v) for v in value)
         else:
             params[paramName] = str(value)
     return params, resolvedInputFiles

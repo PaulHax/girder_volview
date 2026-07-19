@@ -53,16 +53,19 @@ def test_autofill_discards_client_output_name_traversal():
     assert name == "output.Otsu.outputVolume.nii.gz"
 
 
-def test_autofill_overwrites_name_but_merges_other_client_keys():
+def test_autofill_overwrites_name_but_merges_only_wire_keys():
     values = submit._autofillOutputs(
-        {"outputVolume": {"name": "attacker-chosen", "format": "nrrd"}},
+        {"outputVolume": {"name": "attacker-chosen", "format": "nrrd", "a.b": 1}},
         _CLI_OUTPUTS,
         "Otsu",
     )
-    out = values["outputVolume"]
-    # name is server-owned and overwritten; any other key merges through.
-    assert out["name"] == "output.Otsu.outputVolume.nii.gz"
-    assert out["format"] == "nrrd"
+    # name is server-owned and overwritten; only the client-owned wire keys
+    # (format) merge through — an unvetted key (validation 400s it first) can
+    # never ride into the recorded submission even if it reaches the merge.
+    assert values["outputVolume"] == {
+        "name": "output.Otsu.outputVolume.nii.gz",
+        "format": "nrrd",
+    }
 
 
 def test_autofill_generates_name_for_an_unfilled_output():
@@ -286,19 +289,20 @@ def test_validate_rejects_input_without_uris_list():
 
 
 def test_validate_rejects_output_smuggling_uris():
-    # An output object carrying ``uris`` merges through autofill and
-    # shape-matches the translator's INPUT branch, losing its output-folder
-    # param and dying as an internal error. The boundary 400s it instead.
+    # An output object carrying ``uris`` would shape-match the translator's
+    # INPUT branch, losing its output-folder param and dying as an internal
+    # error. Autofill drops the key, but the boundary 400s it by name instead
+    # of silently pruning.
     _assert_value_rejected(
         {"outputVolume": {"uris": ["girder://x"]}}, "outputVolume", "uris"
     )
 
 
 def test_validate_rejects_unknown_output_object_keys():
-    # ``_autofillOutputs`` merges every non-name key into the recorded
-    # submission, so a Mongo-unsafe key name ('a.b', '$where') would break the
-    # job-document insert far from the submitter. Only the
-    # ProcessingOutputRequest wire keys (name, format) may appear.
+    # ``_autofillOutputs`` drops unknown keys, so a Mongo-unsafe key name
+    # ('a.b', '$where') never reaches the job-document insert — but silent
+    # pruning would hide the submitter's mistake. The boundary 400 names the
+    # key; only the ProcessingOutputRequest wire keys (name, format) may appear.
     _assert_value_rejected(
         {"outputVolume": {"name": "x", "a.b": 1}},
         "outputVolume",
