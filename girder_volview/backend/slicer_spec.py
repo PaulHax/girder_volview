@@ -142,9 +142,9 @@ def _parse_param(param_el, section):
     # ctk_cli identifies a <name>-less param by its longflag with leading dashes
     # stripped; slicer_cli_web binds submitted args by that identifier, so the
     # id must match or the submitted value is silently ignored.
-    param_id = _child_text(param_el, "name") or _child_text(
-        param_el, "longflag"
-    ).lstrip("-")
+    param_id = (
+        _child_text(param_el, "name") or _child_text(param_el, "longflag").lstrip("-")
+    ).strip()
     required = len(_child_text(param_el, "index")) > 0
     values = None
     if widget in ("string-enumeration", "number-enumeration"):
@@ -174,6 +174,9 @@ def _parse_panel(panel_el):
     """Group a ``<parameters>`` panel's children by their leading ``<label>``.
 
     Returns ``[(section_label, [param_el, ...]), ...]`` in document order.
+    Params before the first ``<label>`` (legal per the Execution Model) get an
+    empty section rather than being dropped — every surface derived from this
+    walk (spec, outputs, declared submit keys) must see the same param set.
     """
     groups = []
     current = None
@@ -183,7 +186,10 @@ def _parse_panel(panel_el):
             groups.append(current)
         elif child.tag == "description":
             continue
-        elif current is not None:
+        else:
+            if current is None:
+                current = ("", [])
+                groups.append(current)
             current[1].append(child)
     return groups
 
@@ -191,8 +197,9 @@ def _parse_panel(panel_el):
 def _params_from_root(root):
     """Ordered parsed params across every ``<parameters>`` panel.
 
-    Shared by the strict spec path (``_parse_executable``) and the tolerant
-    backend surface (``parse_cli``).
+    The ONE param walk: the strict spec path (``_parse_executable``), the
+    tolerant backend surface (``parse_cli``, outputs included), and the submit
+    declaration map (``declared_params``) all project from it.
     """
     params = []
     for panel_el in _all_children(root, "parameters"):
@@ -228,10 +235,12 @@ def parse_cli(xml_text):
 
     ``category`` (the stripped ``<category>``, or ``None``) is what task scoping
     reads; ``outputs`` is the ``{name, tag, isLabel, fileExtensions}`` descriptor
-    list -- every ``<image>``/``<file>`` output-channel param declaring a
-    ``<name>`` -- that reference-bound collection records and autofill read
-    (``isLabel`` = ``type == "label"``; ``fileExtensions`` lowercased);
-    ``params`` is the raw parsed-param list.
+    list -- every identified ``<image>``/``<file>`` output-channel param -- that
+    reference-bound collection records and autofill read (``isLabel`` =
+    ``type == "label"``; ``fileExtensions`` lowercased); ``params`` is the raw
+    parsed-param list. Outputs project from the SAME ``_params_from_root`` walk
+    as ``params`` and ``declared_params``, so no surface can see a param another
+    one misses.
 
     Tolerant: an unparseable document yields
     ``{category: None, outputs: [], params: []}`` (a malformed CLI is out of
@@ -246,59 +255,50 @@ def parse_cli(xml_text):
         category = category_el.text.strip() or None
     else:
         category = None
-    outputs = []
-    for param in root.iter():
-        channel_el = param.find("channel")
-        if channel_el is None or (channel_el.text or "").strip() != "output":
-            continue
-        if param.tag not in {"image", "file"}:
-            continue
-        name_el = param.find("name")
-        if name_el is None or not name_el.text:
-            continue
-        outputs.append(
-            {
-                "name": name_el.text.strip(),
-                "tag": param.tag,
-                "isLabel": param.get("type") == "label",
-                "fileExtensions": (param.get("fileExtensions") or "").lower(),
-            }
-        )
-    return {"category": category, "outputs": outputs, "params": _params_from_root(root)}
+    params = _params_from_root(root)
+    outputs = [
+        {
+            "name": parsed["id"],
+            "tag": parsed["tag"],
+            "isLabel": parsed["imageType"] == "label",
+            "fileExtensions": (parsed["fileExtensions"] or "").lower(),
+        }
+        for parsed in params
+        if parsed["channel"] == "output"
+        and parsed["tag"] in ("image", "file")
+        and parsed["id"]
+    ]
+    return {"category": category, "outputs": outputs, "params": params}
 
 
 def declared_params(xml_text):
     """Every parameter a CLI declares, keyed by name, independent of UI sectioning.
 
     The submit boundary validates submissions against exactly what the CLI
-    declares. Unlike ``_params_from_root`` (which groups params under their leading
-    ``<label>`` and drops any param not under a section), this walks every param
-    element under every ``<parameters>`` panel — a parameter's identity as an
-    accepted submission key does not depend on how the UI sections it. A param is
-    any direct child whose tag is a known widget type (``_TYPE_MAP``); its key is
-    its ``<name>`` (or ``<longflag>``).
+    declares, projected from the SAME ``_params_from_root`` walk the ordered
+    spec path and ``parse_cli`` outputs use, so the surfaces never drift. A
+    param is any panel child whose tag is a known widget type (``_TYPE_MAP``);
+    its key is its ``<name>`` (or dash-stripped ``<longflag>``), independent of
+    UI sectioning.
 
-    Each entry carries what submit-time value validation needs, projected from the
-    same ``_parse_param`` walk the ordered spec path uses so the two surfaces never
-    drift: ``tag`` (the raw Slicer element), ``widget`` (its ``_TYPE_MAP`` type),
-    ``channel``, ``constraints`` (``{min,max,step}``), ``options`` (converted
-    enumeration members, or ``None``) and ``required`` (the param is indexed).
-    Tolerant: an unparseable document declares nothing.
+    Each entry carries what submit-time value validation needs: ``tag`` (the raw
+    Slicer element), ``widget`` (its ``_TYPE_MAP`` type), ``channel``,
+    ``constraints`` (``{min,max,step}``), ``options`` (converted enumeration
+    members, or ``None``) and ``required`` (the param is indexed). Tolerant: an
+    unparseable document declares nothing.
     """
     try:
         root = ET.fromstring(xml_text or "")
     except ET.ParseError:
         return {}
     params = {}
-    for panel in root.findall("parameters"):
-        for el in panel:
-            if _widget_type(el.tag) is None:
-                continue
-            parsed = _parse_param(el, section="")
-            name = parsed["id"]
-            if not name:
-                continue
-            params[name] = {
+    for parsed in _params_from_root(root):
+        if parsed["widget"] is None:
+            continue
+        name = parsed["id"]
+        if not name:
+            continue
+        params[name] = {
                 "tag": parsed["tag"],
                 "widget": parsed["widget"],
                 "channel": parsed["channel"],

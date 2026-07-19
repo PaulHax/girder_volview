@@ -5,6 +5,9 @@ Job creation and the REST handlers live in ``routes.py``; result
 correlation/collection live in ``outputs.py`` / ``results.py``.
 """
 
+import functools
+import os
+
 from girder.exceptions import RestException
 
 from ..handles import parseFileHandle
@@ -75,13 +78,19 @@ _DEFAULT_ALLOWED_CATEGORIES = ("Radiology", "Segmentation", "Filtering")
 _ALLOWED_CATEGORIES_ENV = "VOLVIEW_PROCESSING_ALLOWED_CATEGORIES"
 
 
-def _allowedCategories():
-    """Allowed CLI ``<category>`` names, lowercased, from env or the default set."""
-    import os
+@functools.lru_cache(maxsize=8)
+def _parseAllowedCategories(raw):
+    override = frozenset(c.strip().lower() for c in raw.split(",") if c.strip())
+    return override or frozenset(c.lower() for c in _DEFAULT_ALLOWED_CATEGORIES)
 
-    raw = os.environ.get(_ALLOWED_CATEGORIES_ENV) or ""
-    override = {c.strip().lower() for c in raw.split(",") if c.strip()}
-    return override or {c.lower() for c in _DEFAULT_ALLOWED_CATEGORIES}
+
+def _allowedCategories():
+    """Allowed CLI ``<category>`` names, lowercased, from env or the default set.
+
+    The env read stays per-call (tests monkeypatch it); only the split/lowercase
+    of a given raw string is memoized.
+    """
+    return _parseAllowedCategories(os.environ.get(_ALLOWED_CATEGORIES_ENV) or "")
 
 
 def _categoryInScope(category, allowed=None):
@@ -96,6 +105,18 @@ def _categoryInScope(category, allowed=None):
     return category is not None and category.lower() in allowed
 
 
+@functools.lru_cache(maxsize=256)
+def _cliCategory(xml_text):
+    """The CLI's parsed ``<category>``, memoized by document.
+
+    ``_scopedCliItems`` re-screens the whole catalog on every listTasks request,
+    but a CLI's XML changes only when its docker image is (re)registered, so the
+    category-only parse is cached on the xml string. Only this scalar is cached
+    — the full ``parse_cli`` structures are mutable and stay per-call.
+    """
+    return parse_cli(xml_text)["category"]
+
+
 def _taskInScope(cliItem, allowed=None):
     """Whether a CLI's ``<category>`` is in the allowed scope (fail-closed).
 
@@ -105,7 +126,7 @@ def _taskInScope(cliItem, allowed=None):
     the single-task callers omit it.
     """
     try:
-        category = parse_cli(cliItem.xml)["category"]
+        category = _cliCategory(cliItem.xml)
     except Exception:
         return False
     return _categoryInScope(category, allowed)

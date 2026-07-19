@@ -9,6 +9,7 @@ import functools
 
 from bson.objectid import ObjectId
 from girder import logger
+from girder_jobs.constants import JobStatus
 
 from ..utils import makeFileDownloadUrl, _toIso
 from .inputs import _TASK_ID_FIELD, readableFilesById
@@ -24,9 +25,9 @@ from .outputs import (
 # ---------------------------------------------------------------------------
 
 
-# The maps below are built on first use and cached (``functools.cache``): they
-# depend on late imports (girder_jobs / girder_worker) unavailable at module
-# import time.
+# The worker-state set below is built on first use and cached
+# (``functools.cache``): it depends on girder_worker, an OPTIONAL runtime
+# dependency that may not be importable.
 
 
 @functools.cache
@@ -61,7 +62,6 @@ def _workerActiveStates():
 @functools.cache
 def _jobStateMap():
     """The girder ``JobStatus`` -> neutral projected-state map, built once."""
-    from girder_jobs.constants import JobStatus
 
     return {
         JobStatus.INACTIVE: "pending",
@@ -86,7 +86,6 @@ def isTerminalStatus(status):
 @functools.cache
 def terminalStatuses():
     """The terminal ``JobStatus`` set itself (for Mongo ``$nin`` queries)."""
-    from girder_jobs.constants import JobStatus
 
     return frozenset({JobStatus.SUCCESS, JobStatus.ERROR, JobStatus.CANCELED})
 
@@ -187,7 +186,6 @@ def _outputSummary(job, user, facts=None):
 
 def _projectJobHistorySummary(job, user, readableOutputFiles=None):
     """Project one Girder job into the lightweight history wire shape."""
-    from girder_jobs.constants import JobStatus
 
     creatorName = (
         " ".join(

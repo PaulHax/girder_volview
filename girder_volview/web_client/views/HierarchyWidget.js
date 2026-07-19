@@ -175,10 +175,7 @@ ItemListWidget.registeredApplications['volview'] = {
     name: 'VolView',
     check: (modelType, model, folder) => {
         if (modelType === 'item') {
-            if (
-                model.get('name').endsWith('volview.zip') ||
-                model.get('name').endsWith('volview.json')
-            ) {
+            if (isSessionItem(model)) {
                 // A session.volview.zip/json item opens as a saved session.
             } else {
                 try {

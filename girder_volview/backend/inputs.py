@@ -10,8 +10,13 @@ from girder.models.file import File
 from girder.models.item import Item
 from girder.models.upload import Upload
 
+# Module-object import (not ``from ... import Job``): call sites resolve
+# ``girder_job.Job`` at call time, so tests may monkeypatch the class on
+# ``girder_jobs.models.job`` and be seen here.
+from girder_jobs.models import job as girder_job
+
 from ..handles import parseFileHandle
-from ..utils import TRANSIENT_STAGED_META_KEY
+from ..utils import TRANSIENT_STAGED_META_KEY, isTransientStagedItem
 
 # ---------------------------------------------------------------------------
 # Input URIs → file ids (the backend reading its own mint)
@@ -184,9 +189,10 @@ def validateStagedReferenceImage(referenceImage, user):
 _TRANSIENT_ORPHAN_TTL = datetime.timedelta(hours=24)
 
 
-def _isTransientItem(item):
-    """Whether an item carries the staging marker."""
-    return bool((item or {}).get("meta", {}).get(TRANSIENT_STAGED_META_KEY))
+# One definition of the staging predicate, shared with the launch-manifest
+# exclusion (``utils.isTransientStagedFile``); aliased so this module's call
+# sites and test doubles keep their name.
+_isTransientItem = isTransientStagedItem
 
 
 def copyStagedInputsIntoJobFolder(params, resolvedInputFiles, user, outputFolder):
@@ -233,14 +239,20 @@ def copyStagedInputsIntoJobFolder(params, resolvedInputFiles, user, outputFolder
             continue
         copied = Item().copyItem(item, creator=user, folder=outputFolder)
         copiedItemIds.append(str(copied["_id"]))
-        # Copied files preserve their names; sorting both sides by name pairs
-        # each original file with its copy regardless of the underlying cursor
-        # order. copyItem duplicates every child file, so a length mismatch
-        # means the staged item's files changed between resolution and copy —
-        # the same race as the concurrent-delete guard above, and the same
-        # typed 409 rather than running the job against a partial input.
-        originals = sorted(Item().childFiles(item), key=lambda f: f.get("name", ""))
-        copies = sorted(Item().childFiles(copied), key=lambda f: f.get("name", ""))
+        # Copied files preserve name/size/checksum; sorting both sides by that
+        # triple pairs each original with its copy regardless of the underlying
+        # cursor order. Girder permits same-named files in one item, so name
+        # alone could pair A with B's copy — with the full triple, files that
+        # still tie are byte-identical and any pairing is correct. copyItem
+        # duplicates every child file, so a length mismatch means the staged
+        # item's files changed between resolution and copy — the same race as
+        # the concurrent-delete guard above, and the same typed 409 rather than
+        # running the job against a partial input.
+        def pairingKey(f):
+            return (f.get("name", ""), f.get("size", 0), f.get("sha512") or "")
+
+        originals = sorted(Item().childFiles(item), key=pairingKey)
+        copies = sorted(Item().childFiles(copied), key=pairingKey)
         if len(originals) != len(copies):
             raise RestException(
                 "A processing input changed while the submission "
@@ -295,7 +307,6 @@ def _cleanupTransientOnJobDone(event):
     that updater happened to DB-load the job first. Reloading keeps cleanup
     self-contained for any terminal updater (girder_worker, a manual cancel).
     """
-    from girder_jobs.models.job import Job as JobModel
 
     from .results import isTerminalStatus
 
@@ -315,7 +326,7 @@ def _cleanupTransientOnJobDone(event):
     # event's in-memory job dict may carry neither. includeLog=False because
     # only the marker + status are read; loading the unbounded log would
     # re-materialize it out of Mongo on every tick.
-    job = JobModel().load(eventJob.get("_id"), force=True, includeLog=False)
+    job = girder_job.Job().load(eventJob.get("_id"), force=True, includeLog=False)
     if not isinstance(job, dict):
         return
     transientItemIds = job.get(TRANSIENT_STAGED_META_KEY)

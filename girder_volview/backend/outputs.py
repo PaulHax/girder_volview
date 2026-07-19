@@ -22,6 +22,11 @@ from girder.exceptions import RestException
 from girder.models.folder import Folder
 from girder.models.item import Item
 
+# Module-object import (not ``from ... import Job``): call sites resolve
+# ``girder_job.Job`` at call time, so tests may monkeypatch the class on
+# ``girder_jobs.models.job`` and be seen here.
+from girder_jobs.models import job as girder_job
+
 from ..utils import JOB_OUTPUT_FOLDER_META_KEY, TRANSIENT_STAGED_META_KEY
 from .inputs import _removeTransientItems
 
@@ -84,11 +89,10 @@ def _jobForOutputFolder(folderId):
     upload reference is NEVER consulted. The id is stored as a string on the job,
     so the query stringifies the parent folder id to match.
     """
-    from girder_jobs.models.job import Job as JobModel
 
     if folderId is None:
         return None
-    job = JobModel().findOne({_OUTPUT_FOLDER_ID_FIELD: str(folderId)})
+    job = girder_job.Job().findOne({_OUTPUT_FOLDER_ID_FIELD: str(folderId)})
     return job if isinstance(job, dict) else None
 
 
@@ -135,9 +139,8 @@ def _recordJobOutput(event):
         # An upload into the job's own folder whose identifier the job never
         # declared is still refused -- correlation binds only declared outputs.
         return
-    from girder_jobs.models.job import Job as JobModel
 
-    JobModel().updateJob(
+    girder_job.Job().updateJob(
         job,
         otherFields={"%s.%s" % (_OUTPUTS_FIELD, identifier): str(fileId)},
     )
@@ -150,7 +153,7 @@ def _cascadeDeleteJobOwnedResources(event):
 
       * REFUSE to remove a non-terminal job -- raise so Girder never reaches the
         DB delete (this protects our own DELETE route AND Girder's built-in job
-        route and any direct ``JobModel.remove`` caller);
+        route and any direct ``Job.remove`` caller);
       * otherwise cascade-delete the owned output folder (``Folder().remove``
         cascades to its items / subfolders / pending uploads) and then any
         remaining staged input items;
@@ -179,7 +182,7 @@ def _cascadeDeleteJobOwnedResources(event):
         # results); a failure here propagates so the job is retained and the
         # delete is retryable. The in-progress marker (NOT a DB unset, which
         # would break retryability on a partial failure) stops the
-        # model.folder.remove reverse cascade from re-entering JobModel.remove
+        # model.folder.remove reverse cascade from re-entering Job.remove
         # for this same job mid-delete.
         folder = Folder().load(folderId, force=True, exc=False)
         if folder is not None:
@@ -215,7 +218,7 @@ def _cascadeDeleteFolderOwnedJob(event):
     * REFUSE to remove a live job's folder -- a non-terminal owned job raises,
       aborting the folder removal (same guard as the job-side cascade);
     * recursion guard -- unset ``volviewOutputFolderId`` on the job (DB + the
-      in-memory doc) BEFORE ``JobModel().remove``, so the job-side cascade sees
+      in-memory doc) BEFORE ``girder_job.Job().remove``, so the job-side cascade sees
       no owned folder and only sweeps staged inputs. Unsetting is safe in this
       direction: the folder is going away regardless, so a retained pointer
       could only dangle.
@@ -224,7 +227,6 @@ def _cascadeDeleteFolderOwnedJob(event):
     a pre-publication orphan, an already-cascaded delete), or a removal driven
     by the job-side cascade itself (``_CASCADING_FOLDER_IDS``).
     """
-    from girder_jobs.models.job import Job as JobModel
 
     from .results import isTerminalStatus
 
@@ -245,18 +247,18 @@ def _cascadeDeleteFolderOwnedJob(event):
             "cancel the job first",
             code=409,
         )
-    JobModel().update(
+    girder_job.Job().update(
         {"_id": job["_id"]}, {"$unset": {_OUTPUT_FOLDER_ID_FIELD: ""}}
     )
     job.pop(_OUTPUT_FOLDER_ID_FIELD, None)
     try:
-        JobModel().remove(job)
+        girder_job.Job().remove(job)
     except Exception:
         # Restore the ownership pointer so a failed job removal never orphans
         # the history row: the raise aborts the folder delete (the shell is
         # retained), and the restored pointer keeps the job correlated with it
         # for a later retry.
-        JobModel().update(
+        girder_job.Job().update(
             {"_id": job["_id"]},
             {"$set": {_OUTPUT_FOLDER_ID_FIELD: str(folderId)}},
         )
@@ -303,7 +305,6 @@ def _liveJobOwningFolderUnderTargets(folderIds=(), baseParents=()):
     are few at any moment, so checking each one's ancestor chain is cheap; the
     query excludes settled history via the indexed ownership field + status.
     """
-    from girder_jobs.models.job import Job as JobModel
 
     from .results import terminalStatuses
 
@@ -311,7 +312,7 @@ def _liveJobOwningFolderUnderTargets(folderIds=(), baseParents=()):
     baseTargets = {(parentType, str(_id)) for parentType, _id in baseParents}
     if not folderTargets and not baseTargets:
         return None
-    jobs = JobModel().find(
+    jobs = girder_job.Job().find(
         {
             _OUTPUT_FOLDER_ID_FIELD: {"$exists": True},
             "status": {"$nin": list(terminalStatuses())},

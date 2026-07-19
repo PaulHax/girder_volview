@@ -21,11 +21,17 @@ from girder import events, logger
 from girder.api import access
 from girder.api.describe import Description, autoDescribeRoute
 from girder.api.rest import Resource, boundHandler
-from girder.constants import AccessType, TokenScope
+from girder.constants import AccessType, SortDir, TokenScope
 from girder.exceptions import RestException, ValidationException
 from girder.models.folder import Folder
 
+# Module-object import (not ``from ... import Job``): call sites resolve
+# ``girder_job.Job`` at call time, so tests may monkeypatch the class on
+# ``girder_jobs.models.job`` and be seen here.
+from girder_jobs.models import job as girder_job
+
 from ..utils import (
+    _toIso,
     makeFileDownloadUrl,
     JOB_OUTPUT_FOLDER_META_KEY,
     TRANSIENT_STAGED_META_KEY,
@@ -84,9 +90,7 @@ def ensureJobHistoryIndexes(jobModel=None):
     correlation is a full jobs-collection scan that worsens as history grows.
     """
     if jobModel is None:
-        from girder_jobs.models.job import Job as JobModel
-
-        jobModel = JobModel()
+        jobModel = girder_job.Job()
     jobModel.collection.create_index(
         [
             (inputs._LAUNCH_FOLDER_FIELD, 1),
@@ -105,7 +109,7 @@ def ensureJobHistoryIndexes(jobModel=None):
 def _encodeJobCursor(job):
     payload = json.dumps(
         {
-            "created": results._toIso(job.get("created")),
+            "created": _toIso(job.get("created")),
             "id": str(job["_id"]),
         },
         separators=(",", ":"),
@@ -163,8 +167,6 @@ def listJobHistory(self, folder, limit=JOB_HISTORY_PAGE_DEFAULT, cursor=None):
     user = self.getCurrentUser()
     if not user:
         return {"jobs": [], "nextCursor": None}
-    from girder.constants import SortDir
-    from girder_jobs.models.job import Job as JobModel
 
     pageSize = _jobHistoryPageSize(limit)
     query = {
@@ -173,7 +175,7 @@ def listJobHistory(self, folder, limit=JOB_HISTORY_PAGE_DEFAULT, cursor=None):
     }
     if cursor:
         query["$or"] = _jobCursorContinuation(cursor)
-    found = JobModel().findWithPermissions(
+    found = girder_job.Job().findWithPermissions(
         query=query,
         user=user,
         jobUser=user,
@@ -182,7 +184,7 @@ def listJobHistory(self, folder, limit=JOB_HISTORY_PAGE_DEFAULT, cursor=None):
         limit=pageSize + 1,
         # The summary projection never reads the log, which is unbounded (multi-MB
         # on chatty/failed CLIs), so exclude it from every page. Mirrors
-        # JobModel.load(includeLog=False)'s {'log': False} projection.
+        # Job.load(includeLog=False)'s {'log': False} projection.
         fields={"log": False},
     )
     page = list(found)
@@ -442,9 +444,8 @@ def _prepareSubmissionFields(
 
 
 def _jobForSubmission(submissionId):
-    from girder_jobs.models.job import Job as JobModel
 
-    return JobModel().findOne({_SUBMISSION_ID_FIELD: submissionId})
+    return girder_job.Job().findOne({_SUBMISSION_ID_FIELD: submissionId})
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_WRITE)
@@ -556,9 +557,8 @@ def runTask(self, folder, taskId, body):
             # A job WAS created: cancel it but RETAIN its ownership record so the
             # normal terminal + deletion cascade cleans the output folder safely.
             try:
-                from girder_jobs.models.job import Job as JobModel
 
-                JobModel().cancelJob(job_doc)
+                girder_job.Job().cancelJob(job_doc)
             except Exception:
                 logger.exception(
                     "Failed to cancel ambiguously published job %s",
@@ -587,11 +587,10 @@ def _loadJobForStatusProjection(jobId, user):
     terminal, so the log is reloaded at most once per job. The detail route is
     the full-log path.
     """
-    from girder_jobs.models.job import Job as JobModel
 
-    job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
+    job = girder_job.Job().load(jobId, user=user, level=AccessType.READ, exc=True)
     if results._projectJobState(job) == "error":
-        job = JobModel().load(
+        job = girder_job.Job().load(
             jobId,
             user=user,
             level=AccessType.READ,
@@ -623,9 +622,8 @@ def getJob(self, jobId):
 )
 def getJobHistoryDetail(self, jobId):
     user = self.getCurrentUser()
-    from girder_jobs.models.job import Job as JobModel
 
-    job = JobModel().load(
+    job = girder_job.Job().load(
         jobId,
         user=user,
         level=AccessType.READ,
@@ -662,12 +660,11 @@ def getJobHistoryDetail(self, jobId):
 )
 def deleteJob(self, jobId):
     user = self.getCurrentUser()
-    from girder_jobs.models.job import Job as JobModel
 
-    model = JobModel()
+    model = girder_job.Job()
     job = model.load(jobId, user=user, level=AccessType.WRITE, exc=True)
     # The model.job.remove handler ALSO enforces this (protecting other
-    # JobModel.remove callers); the route returns the typed product response
+    # Job.remove callers); the route returns the typed product response
     # rather than the model's raise.
     if not results.isTerminalStatus(job.get("status")):
         raise RestException(
@@ -689,9 +686,8 @@ def deleteJob(self, jobId):
 )
 def getJobResults(self, jobId):
     user = self.getCurrentUser()
-    from girder_jobs.models.job import Job as JobModel
 
-    job = JobModel().load(jobId, user=user, level=AccessType.READ, exc=True)
+    job = girder_job.Job().load(jobId, user=user, level=AccessType.READ, exc=True)
     payload = results._jobResultsPayload(job, user)
     if payload.get("code"):
         cherrypy.response.status = 409
@@ -717,9 +713,8 @@ def getJobResults(self, jobId):
 )
 def cancelJob(self, jobId):
     user = self.getCurrentUser()
-    from girder_jobs.models.job import Job as JobModel
 
-    jobModel = JobModel()
+    jobModel = girder_job.Job()
     job = jobModel.load(jobId, user=user, level=AccessType.WRITE, exc=True)
     try:
         jobModel.cancelJob(job)
@@ -843,7 +838,7 @@ def addBackendRoutes(info):
     # Ownership cascade: each job owns one private output folder + its staged
     # inputs. Running before the DB delete, this refuses to remove a nonterminal
     # owned job and cascade-deletes its owned resources, so the DELETE route,
-    # Girder's built-in job route, and any direct JobModel.remove caller all
+    # Girder's built-in job route, and any direct Job.remove caller all
     # honor the same terminal guard and cleanup.
     events.bind(
         "model.job.remove",
@@ -890,9 +885,10 @@ def addBackendRoutes(info):
     )
     # The recorded id map is READ-exposed; the job's own ACL is the gate
     # (otherFields + exposeFields, mirroring slicer_cli_web's slicerCLIBindings).
-    from girder_jobs.models.job import Job as JobModel
 
-    JobModel().exposeFields(level=AccessType.READ, fields={outputs._OUTPUTS_FIELD})
+    girder_job.Job().exposeFields(
+        level=AccessType.READ, fields={outputs._OUTPUTS_FIELD}
+    )
     info["apiRoot"].folder.route(
         "GET", (":folderId", PROCESSING_ROUTE_NAME, "tasks"), listTasks
     )

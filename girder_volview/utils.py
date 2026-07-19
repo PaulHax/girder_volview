@@ -250,6 +250,16 @@ def isJobOutputFolderItem(item, folderCache=None):
     return bool((folder or {}).get("meta", {}).get(JOB_OUTPUT_FOLDER_META_KEY))
 
 
+def isTransientStagedItem(item):
+    """Whether an item carries the transient staging marker.
+
+    The ONE definition of "this item is staged working data", shared by the
+    launch-manifest exclusion here and the staging/cleanup lifecycle
+    (``backend.inputs``). ``None``/marker-less items are not transient.
+    """
+    return bool((item or {}).get("meta", {}).get(TRANSIENT_STAGED_META_KEY))
+
+
 def isTransientStagedFile(file, user=None, itemCache=None):
     """Whether ``file`` was staged as a transient processing input.
 
@@ -258,8 +268,7 @@ def isTransientStagedFile(file, user=None, itemCache=None):
     abandoned staged segmentation as an ordinary image. Best-effort like the
     job-output check: an absent/unreadable parent item means not-transient.
     """
-    item = _parentItemForFile(file, user, itemCache)
-    return bool((item or {}).get("meta", {}).get(TRANSIENT_STAGED_META_KEY))
+    return isTransientStagedItem(_parentItemForFile(file, user, itemCache))
 
 
 def isLaunchFile(file, user=None, itemCache=None, folderCache=None):
