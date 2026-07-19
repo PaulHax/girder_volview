@@ -11,14 +11,14 @@
 # idempotent, so this script is safe to run repeatedly.
 #
 # Usage:
-#   ./ensure-radiology-cli.sh
+#   script/ensure-radiology-cli
 #
 # Env overrides:
 #   GIRDER_URL       default http://localhost:8080
 #   DSA_ADMIN_USER   default admin
 #   DSA_ADMIN_PASS   default password
 #   CLI_IMAGE        default volview-radiology-cli:latest
-#   CLI_REPO         default /home/paulhax/src/dsa/volview-radiology-cli
+#   CLI_REPO         required; the volview-radiology-cli checkout (set in .env)
 #   DEMO_FOLDER      optional folder id used to verify the facade task list;
 #                    defaults to the authenticated user's Public folder
 
@@ -28,7 +28,7 @@ GIRDER_URL=${GIRDER_URL:-http://localhost:8080}
 DSA_ADMIN_USER=${DSA_ADMIN_USER:-admin}
 DSA_ADMIN_PASS=${DSA_ADMIN_PASS:-password}
 CLI_IMAGE=${CLI_IMAGE:-volview-radiology-cli:latest}
-CLI_REPO=${CLI_REPO:-/home/paulhax/src/dsa/volview-radiology-cli}
+: "${CLI_REPO:?not set — copy .env.example to .env and point CLI_REPO at your volview-radiology-cli checkout}"
 DEMO_FOLDER=${DEMO_FOLDER:-}
 
 # The image manifest is the sole task inventory.

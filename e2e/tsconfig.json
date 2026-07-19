@@ -15,6 +15,9 @@
     "helpers/**/*.ts",
     "playwright.config.ts",
     "global.setup.ts",
-    "global.teardown.ts"
+    "global.teardown.ts",
+    "compat.playwright.config.ts",
+    "compat.setup.ts",
+    "compat.teardown.ts"
   ]
 }

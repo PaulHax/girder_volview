@@ -49,12 +49,21 @@ export async function healthCheck(request: APIRequestContext): Promise<void> {
 const RECEIPT_URL = `${CONFIG.baseURL}/static/built/plugins/volview/deployed-heads.json`;
 
 // Only girderSha is enforced; the rest are informational. Extra fields are fine.
-type DeployReceipt = {
+export type DeployReceipt = {
   girderSha?: string;
   girderShort?: string;
   volviewSha?: string;
   volviewShort?: string;
+  indexMd5?: string;
+  backendTreeMd5?: string;
 };
+
+// The receipt as served (compat setup records the deployed SHAs into its state).
+export async function fetchDeployReceipt(request: APIRequestContext): Promise<DeployReceipt> {
+  const res = await request.get(RECEIPT_URL, { timeout: 10_000 });
+  if (!res.ok()) throw new Error(`[e2e] no deploy receipt at ${RECEIPT_URL} (HTTP ${res.status()})`);
+  return JSON.parse(await res.text());
+}
 
 function gitHead(dir: string): string | null {
   try {
@@ -79,13 +88,41 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
   }
 
   // The harness lives at <girder_volview worktree>/e2e/helpers, so the worktree
-  // root is two dirs up. Prove the stack serves THIS worktree's HEAD.
+  // root is two dirs up. Prove the stack serves THIS worktree's HEAD — unless
+  // E2E_EXPECT_GIRDER_SHA overrides the expectation (the compat capture phase
+  // runs these specs against a deliberately different deploy, e.g. main).
+  const override = process.env.E2E_EXPECT_GIRDER_SHA;
   const worktreeRoot = path.resolve(__dirname, '..', '..');
-  const localGirder = gitHead(worktreeRoot);
-  if (localGirder && receipt.girderSha && localGirder !== receipt.girderSha) {
+  const expected = override || gitHead(worktreeRoot);
+  if (override) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[e2e] E2E_EXPECT_GIRDER_SHA set: expecting deployed girder ${override.slice(0, 9)}`
+    );
+  }
+  // Both halves of the comparison must exist, or the guard is not a guard. It
+  // used to be written `expected && receipt.girderSha && expected !== ...`,
+  // which silently passed whenever either side was missing — the two cases
+  // where a wrong deploy is most likely, not least.
+  if (!receipt.girderSha) {
+    throw new Error(
+      `[e2e] the deploy receipt at ${RECEIPT_URL} has no girderSha, so it cannot ` +
+        `certify what the stack serves. ${RECEIPT_HINT}`
+    );
+  }
+  if (!expected) {
+    throw new Error(
+      `[e2e] cannot determine the expected girder_volview sha: ${worktreeRoot} is not a\n` +
+        `git checkout and E2E_EXPECT_GIRDER_SHA is unset. Set E2E_EXPECT_GIRDER_SHA to the\n` +
+        `sha the stack should be serving (the compat harness does this for its baseline,\n` +
+        `which is a git-archive export with no .git of its own).`
+    );
+  }
+  if (expected !== receipt.girderSha) {
     throw new Error(
       `[e2e] deploy is stale: the stack serves girder_volview ${receipt.girderShort} ` +
-        `but this worktree is at ${localGirder.slice(0, 9)}.\n` +
+        `but the expected sha is ${expected.slice(0, 9)}` +
+        `${override ? ' (from E2E_EXPECT_GIRDER_SHA)' : ' (this worktree HEAD)'}.\n` +
         `Redeploy and refresh the receipt. ${RECEIPT_HINT}`
     );
   }
