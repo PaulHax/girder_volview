@@ -46,6 +46,13 @@ export async function remoteSave(page: Page): Promise<string> {
     { timeout: 60_000 }
   );
   await saveButton.click();
+  // Main-era clients interpose a "Saving Session State" filename dialog even
+  // for remote saves; confirm it. The branch client saves directly, so the
+  // button simply never appears.
+  const confirmSave = page.locator('[data-testid="save-session-confirm-button"]').first();
+  if (await confirmSave.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await confirmSave.click();
+  }
   const res = await savePost;
   expect(res.status(), `save POST failed: ${res.status()} ${res.url()}`).toBeLessThan(300);
 
@@ -80,31 +87,35 @@ export async function openModuleTab(page: Page, name: string): Promise<void> {
   await page.locator(`button[data-testid="module-tab-${name}"]`).click();
 }
 
-// Open the Jobs tab and click the first succeeded job's "Load results" — the
-// come-back path: this fetches the results AND applies them through the same
+// Open the Jobs tab and click the first succeeded job's "Load" — the come-back
+// path: this fetches the results AND applies them through the same
 // intent-honoring pipeline the live flow uses (labelmap → segment group on the
-// reconstructed parent image, plain image → new dataset). The button then
-// yields to informational result rows.
+// reconstructed parent image, plain image → new dataset). The button is
+// consumed: the row's subtitle then reports the loaded result count.
 export async function loadJobResults(page: Page): Promise<void> {
   await openModuleTab(page, 'Jobs');
   const panel = page.locator('.jobs-module');
-  const load = panel.getByRole('button', { name: 'Load results' }).first();
-  await expect(load, 'no "Load results" — is the succeeded job listed in the Jobs tab?').toBeVisible();
+  const load = panel.getByRole('button', { name: 'Load', exact: true }).first();
+  await expect(load, 'no "Load" button — is the succeeded job listed in the Jobs tab?').toBeVisible();
   await load.click();
-  await expect(panel.locator('.result-row').first(), 'no result row after Load results').toBeVisible();
+  await expect(
+    panel.getByText(/\d+ results?/).first(),
+    'no result count on the job row after Load'
+  ).toBeVisible();
 }
 
 // ---------------------------------------------------------------------------
-// Live submission path (the UI flow, distinct from the come-back "Load results"
+// Live submission path (the UI flow, distinct from the come-back "Load"
 // path above): task picker -> task form -> provenance binding -> Submit -> poll
 // -> live auto-apply.
 // ---------------------------------------------------------------------------
 
 // Select a registered task in the Jobs tab's TaskPicker (a v-select labelled
-// "Task"), matching by title prefix (e.g. "Otsu").
+// "Task"), matching by title prefix (e.g. "Otsu"). Vuetify's floating label is
+// not programmatically associated with the input, so match the v-select itself.
 export async function selectTask(page: Page, titlePrefix: string): Promise<void> {
   await openModuleTab(page, 'Jobs');
-  const picker = page.locator('.jobs-module').getByLabel('Task', { exact: false });
+  const picker = page.locator('.jobs-module .v-select', { hasText: 'Task' }).first();
   await expect(picker, 'no Task picker — is a processing provider registered?').toBeVisible();
   await picker.click();
   const option = page
@@ -115,13 +126,13 @@ export async function selectTask(page: Page, titlePrefix: string): Promise<void>
   await option.click();
 }
 
-// Wait for the auto-bound image input to report bound provenance (FileWidget's
-// "✓ bound to …" line) before submit — a volume with no server provenance blocks
-// submit, so this proves the binding/staging step ran.
+// Wait for the auto-bound image input to render (FileWidget's "Active dataset"
+// caption under the bound image name) before submit — a volume with no server
+// provenance blocks submit, so this proves the binding step ran.
 export async function waitForInputBound(page: Page, timeout = 30_000): Promise<void> {
   await expect(
-    page.locator('.jobs-module').getByText(/bound to/i).first(),
-    'the image input never reported bound provenance'
+    page.locator('.jobs-module').getByText('Active dataset').first(),
+    'the image input never bound to the active dataset'
   ).toBeVisible({ timeout });
 }
 

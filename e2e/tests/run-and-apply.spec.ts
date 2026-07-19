@@ -56,103 +56,71 @@ test.describe('jobs come-back path (Load results)', () => {
     await waitForVolViewReady(page);
 
     // The come-back job must NOT auto-apply: before the explicit load there is
-    // no segment group and no result row.
+    // no Otsu segment group and no loaded-result count.
     await openModuleTab(page, 'Annotations');
     await expect(
-      page.locator('.segment-group-list').getByText('new job result'),
-      'a history job auto-applied without "Load results"'
+      page.locator('.segment-group-list').getByText(/Otsu/),
+      'a history job auto-applied without "Load"'
     ).toHaveCount(0);
 
     await loadJobResults(page);
     await shot(page, info, 'jobs-tab-results');
-    await expect(page.locator('.jobs-module .result-row').first()).toBeVisible();
     // The button is consumed: loading = applying, exactly once.
     await expect(
-      page.locator('.jobs-module').getByRole('button', { name: 'Load results' })
+      page.locator('.jobs-module').getByRole('button', { name: 'Load', exact: true })
     ).toHaveCount(0);
 
-    // Intent-honoring apply: the labelmap became a "new job result" segment
+    // Intent-honoring apply: the labelmap became an "<image>.<Task>" segment
     // group on the reconstructed parent image (no manual verb choice).
     await openModuleTab(page, 'Annotations');
     await expect(
-      page.locator('.segment-group-list').getByText('new job result').first(),
-      'no "new job result" chip in the segment-group list'
+      page.locator('.segment-group-list').getByText(/Otsu/).first(),
+      'no Otsu segment group in the segment-group list'
     ).toBeVisible({ timeout: 30_000 });
     await shot(page, info, 'come-back-apply');
   });
 });
 
 // Drives the full visible UI path — task picker, form, provenance binding,
-// Submit, poll, authenticated result stream, live auto-apply — under token-only
-// auth with no girderToken cookie. The come-back suite above covers the
-// explicit "Load results" path only.
-test.describe('token-only run + live auto-apply (the submission gate)', () => {
-  test('launches token-only, submits from the UI, and live-auto-applies without a cookie', async ({
-    browser,
+// Submit, poll, result stream, live auto-apply — under the product's cookie
+// auth (the girder launcher's popup shares the session cookie; this girder
+// does not honor Authorization: Bearer). The come-back suite above covers the
+// explicit "Load" path only.
+test.describe('live submission + auto-apply (the submission gate)', () => {
+  test('submits from the UI and live-auto-applies the result', async ({
+    page,
+    request,
+    context,
   }, info) => {
-    // An ISOLATED context so no girderToken cookie can leak from the cookie-based
-    // block above — token-only means no cookie at all.
-    const context = await browser.newContext({ ignoreHTTPSErrors: true });
-    const req = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
-    try {
-      const token = await login(req);
-      const { folderId } = resolveContext();
-      const { itemId, itemName } = await resolveImageItem(req, token, folderId);
-      const g: Girder = { token, folderId, itemId, itemName };
+    const g = await setup(request, context); // plants the girderToken cookie
 
-      const page = await context.newPage();
+    // Result-byte reads go through proxiable file URLs; count them to prove the
+    // result stream actually flowed.
+    const fileReads: string[] = [];
+    page.on('request', (r) => {
+      if (/\/file\/[^/]+\/proxiable\//.test(r.url())) fileReads.push(r.url());
+    });
 
-      // Track authenticated result-byte reads: the client fetches result files
-      // via proxiable file URLs carrying the Authorization bearer ($fetch/pool).
-      const authedFileReads: string[] = [];
-      let sawUnauthedFileRead = false;
-      page.on('request', (r) => {
-        if (/\/file\/[^/]+\/proxiable\//.test(r.url())) {
-          const auth = r.headers()['authorization'];
-          if (auth && /^Bearer /i.test(auth)) authedFileReads.push(r.url());
-          else sawUnauthedFileRead = true;
-        }
-      });
+    const { url } = launchUrl(g, 'checked');
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await waitForVolViewReady(page);
 
-      // Launch token-only (no plantCookie): the ?token= leg sets the bearer.
-      const { url } = launchUrl(g, 'checked', { token });
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await waitForVolViewReady(page);
+    // Drive the VISIBLE submission flow: task picker -> binding -> Submit.
+    await selectTask(page, 'Otsu');
+    await waitForInputBound(page);
+    await submitTaskFromForm(page);
 
-      // Drive the VISIBLE submission flow: task picker -> binding -> Submit.
-      await selectTask(page, 'Otsu');
-      await waitForInputBound(page);
-      await submitTaskFromForm(page);
+    // Poll to live completion (the store's own toast), then confirm LIVE
+    // auto-apply attached the result with NO manual "Load" click:
+    // the Otsu labelmap becomes an "<image>.<Task>" segment group.
+    await waitForJobComplete(page);
+    await openModuleTab(page, 'Annotations');
+    await expect(
+      page.locator('.segment-group-list').getByText(/Otsu/).first(),
+      'live auto-apply did not attach a segment group'
+    ).toBeVisible({ timeout: 30_000 });
+    await shot(page, info, 'live-auto-apply');
 
-      // Poll to live completion (the store's own toast), then confirm LIVE
-      // auto-apply attached the result with NO manual "Load results" click:
-      // the Otsu labelmap becomes a "new job result" segment group.
-      await waitForJobComplete(page);
-      await openModuleTab(page, 'Annotations');
-      await expect(
-        page.locator('.segment-group-list').getByText('new job result').first(),
-        'live auto-apply did not attach a segment group'
-      ).toBeVisible({ timeout: 30_000 });
-      await shot(page, info, 'token-only-auto-apply');
-
-      // Token-only proof: an authenticated result-byte read happened, none went
-      // out unauthenticated, and NO girderToken cookie ever existed.
-      expect(
-        authedFileReads.length,
-        'no authenticated proxiable file read observed'
-      ).toBeGreaterThan(0);
-      expect(
-        sawUnauthedFileRead,
-        'a proxiable file read went out without a bearer'
-      ).toBe(false);
-      const cookies = await context.cookies();
-      expect(
-        cookies.find((c) => c.name === 'girderToken'),
-        'a girderToken cookie existed in a token-only launch'
-      ).toBeUndefined();
-    } finally {
-      await req.dispose();
-      await context.close();
-    }
+    expect(fileReads.length, 'no proxiable result file read observed').toBeGreaterThan(0);
   });
 });

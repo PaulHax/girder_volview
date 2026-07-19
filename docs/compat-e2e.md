@@ -64,7 +64,11 @@ cp .env.example .env && $EDITOR .env      # DSA_DEVOPS, VOLVIEW_ROOT, ...
 ```
 
 The stack must already be running (see `docs/development.md`); `script/deploy`
-only swaps the code it serves. What the harness needs beyond `.env`:
+only swaps the code it serves. It relies on one local dev patch to the upstream
+DSA checkout — `devops/with-dive-volview/docker-compose.override.yml` mounting
+`${GIRDER_VOLVIEW_SRC:-../../../girder_volview}` instead of the hardcoded main
+checkout — without which the container always serves `../../../girder_volview`
+and no worktree (or compat baseline) can be deployed. What the harness needs beyond `.env`:
 
 - **The baseline backend** — no checkout required. It is exported from this
   repo's own history at the sha pinned in `e2e/compat-baseline.json`. Override

@@ -25,17 +25,17 @@ export async function authenticate(
   return { token, userId };
 }
 
-// Create a fresh, public test folder under the authenticated user.
-async function createFolder(
+// Create a public folder under any parent (user or folder).
+export async function createFolderUnder(
   request: APIRequestContext,
   token: string,
-  userId: string
+  parentType: 'user' | 'folder',
+  parentId: string,
+  name: string
 ): Promise<string> {
-  const runId = `${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
-  const name = `girder-volview-e2e-${runId}`;
   const url = apiUrl(
-    `/folder?parentType=user&parentId=${userId}&name=${encodeURIComponent(name)}` +
-      `&reuseExisting=false&public=true`
+    `/folder?parentType=${parentType}&parentId=${parentId}` +
+      `&name=${encodeURIComponent(name)}&reuseExisting=false&public=true`
   );
   const res = await request.post(url, { headers: { 'Girder-Token': token } });
   const folder = await readJson(res, `create folder ${name}`);
@@ -45,13 +45,23 @@ async function createFolder(
   return folder._id;
 }
 
+// Create a fresh, public test folder under the authenticated user.
+async function createFolder(
+  request: APIRequestContext,
+  token: string,
+  userId: string
+): Promise<string> {
+  const runId = `${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
+  return createFolderUnder(request, token, 'user', userId, `girder-volview-e2e-${runId}`);
+}
+
 // Upload one in-memory file to a folder via girder's two-step upload flow
 // (init POST /file -> {_id}; then POST /file/chunk with the bytes as the raw
 // request body). Modern girder REJECTS multipart on /file/chunk and reads the
 // chunk from the body, with offset + uploadId in the query string (exactly what
 // girder_client / the girder web client do). Girder auto-creates the containing
 // item and returns the finalized File (with itemId).
-async function uploadFile(
+export async function uploadFile(
   request: APIRequestContext,
   token: string,
   folderId: string,

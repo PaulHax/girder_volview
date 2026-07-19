@@ -3,6 +3,9 @@ import { CONFIG } from './helpers/config';
 
 export default defineConfig({
   testDir: './tests',
+  // Compat specs run only under compat.playwright.config.ts (they need the
+  // two-deploy orchestration and its persisted state).
+  testIgnore: '**/compat/**',
   globalSetup: require.resolve('./global.setup'),
   globalTeardown: require.resolve('./global.teardown'),
   // A full launch + render + save + reload round-trip is slow.

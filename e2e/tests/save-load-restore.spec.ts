@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import {
   setup,
   launchUrl,
@@ -13,39 +13,15 @@ import {
   remoteSave,
   shot,
 } from '../helpers/volview';
+import {
+  isSessionManifest,
+  resourceNames,
+  gotoCapturingManifest,
+  reloadCapturingManifest,
+} from '../helpers/manifest';
 
 // The F5 save/load/restore lifecycle per gesture, against a DEPLOYED
 // girder_volview + VolView stack.
-
-const isSessionManifest = (json: any) =>
-  Array.isArray(json?.resources) &&
-  json.resources.some((r: any) => typeof r?.name === 'string' && r.name.endsWith('.volview.zip'));
-
-const resourceNames = (json: any): string[] =>
-  Array.isArray(json?.resources) ? json.resources.map((r: any) => r?.name).filter(Boolean) : [];
-
-const isManifestGet = (response: { request: () => { method: () => string }; url: () => string }) =>
-  response.request().method() === 'GET' &&
-  /\/(item|folder)\/[^/]+\/volview$/.test(new URL(response.url()).pathname);
-
-async function captureManifest(page: Page, navigate: () => Promise<unknown>): Promise<any> {
-  const manifestResp = page.waitForResponse(isManifestGet, { timeout: 60_000 });
-  await navigate();
-  const resp = await manifestResp.catch(() => undefined);
-  await waitForVolViewReady(page);
-  if (!resp) return undefined;
-  try {
-    return await resp.json();
-  } catch {
-    return undefined;
-  }
-}
-
-const gotoCapturingManifest = (page: Page, url: string) =>
-  captureManifest(page, () => page.goto(url, { waitUntil: 'domcontentloaded' }));
-
-const reloadCapturingManifest = (page: Page) =>
-  captureManifest(page, () => page.reload({ waitUntil: 'domcontentloaded' }));
 
 test.describe.configure({ mode: 'serial' });
 

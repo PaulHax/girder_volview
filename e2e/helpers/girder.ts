@@ -64,14 +64,25 @@ export async function setup(request: APIRequestContext, context: BrowserContext)
   return { token, folderId, itemId, itemName };
 }
 
-// How many session.volview.zip items currently sit in the folder (used to prove
-// a save created a NEW session item for the folder-scoped gestures).
-export async function countSessionItems(request: APIRequestContext, g: Girder): Promise<number> {
-  const res = await request.get(api(`/item?folderId=${g.folderId}&limit=1000`), {
-    headers: { 'Girder-Token': g.token },
+// The session.volview.zip items currently in a folder. countSessionItems proves
+// a save created a NEW session item; the compat capture diffs the listing to
+// discover which item a save minted (main's save response carries no resumeUrl).
+export async function listSessionItems(
+  request: APIRequestContext,
+  token: string,
+  folderId: string
+): Promise<Array<{ _id: string; name: string }>> {
+  const res = await request.get(api(`/item?folderId=${folderId}&limit=1000`), {
+    headers: { 'Girder-Token': token },
   });
-  const items: Array<{ name: string }> = await res.json();
-  return items.filter((it) => it.name.endsWith('.volview.zip')).length;
+  const items: Array<{ _id: string; name: string }> = await res.json();
+  // Substring, not endsWith: girder dedupes colliding item names by appending
+  // " (1)", and the backend's isSessionItem treats those as sessions too.
+  return items.filter((it) => it.name.includes('.volview.zip'));
+}
+
+export async function countSessionItems(request: APIRequestContext, g: Girder): Promise<number> {
+  return (await listSessionItems(request, g.token, g.folderId)).length;
 }
 
 // ---------------------------------------------------------------------------
