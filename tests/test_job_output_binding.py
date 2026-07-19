@@ -114,8 +114,9 @@ def _installFile(monkeypatch, byId=None):
         # The batched loader resolves readability through the parent item; give
         # each canned file a (readable) one unless the test models its own.
         doc.setdefault("itemId", ObjectId())
-    monkeypatch.setattr(results_mod, "File", lambda: _FakeFile(byId))
-    monkeypatch.setattr(results_mod, "Item", lambda: _FakeReadableItems())
+    # The batched loader lives in inputs.readableFilesById (results delegates).
+    monkeypatch.setattr(inputs, "File", lambda: _FakeFile(byId))
+    monkeypatch.setattr(inputs, "Item", lambda: _FakeReadableItems())
 
 
 def _deterministicUrls(monkeypatch):

@@ -35,8 +35,8 @@ def _installReadableFiles(monkeypatch, docs):
         def findWithPermissions(self, query, fields=None, user=None, level=None):
             return [{"_id": i} for i in query["_id"]["$in"]]
 
-    monkeypatch.setattr(results, "File", Files)
-    monkeypatch.setattr(results, "Item", Items)
+    monkeypatch.setattr(inputs, "File", Files)
+    monkeypatch.setattr(inputs, "Item", Items)
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +212,8 @@ def test_job_history_batches_readable_output_files_for_the_page(monkeypatch):
             assert set(query["_id"]["$in"]) == {readable_item_id}
             return [{"_id": readable_item_id}]
 
-    monkeypatch.setattr(results, "File", Files)
-    monkeypatch.setattr(results, "Item", Items)
+    monkeypatch.setattr(inputs, "File", Files)
+    monkeypatch.setattr(inputs, "Item", Items)
     job = {
         "_id": "job-1",
         "status": JobStatus.SUCCESS,
@@ -380,21 +380,37 @@ def test_manifest_reuses_parent_item_for_dicom_series(
     folder_id = "series-folder"
     item_loads = []
 
+    def _itemDoc(loaded_id):
+        return {
+            "_id": loaded_id,
+            "folderId": folder_id,
+            "meta": {"dicom": {"Modality": "CT"}},
+        }
+
     class Items:
         def load(self, loaded_id, **kwargs):
             item_loads.append(loaded_id)
-            return {
-                "_id": loaded_id,
-                "folderId": folder_id,
-                "meta": {"dicom": {"Modality": "CT"}},
-            }
+            return _itemDoc(loaded_id)
+
+        def findWithPermissions(self, query=None, **kwargs):
+            # The batched cache prime: ONE find over the distinct parent items.
+            ids = ((query or {}).get("_id") or {}).get("$in", [])
+            item_loads.extend(ids)
+            return [_itemDoc(i) for i in ids]
+
+    def _folderDoc(loaded_id):
+        return {
+            "_id": loaded_id,
+            "meta": {utils.JOB_OUTPUT_FOLDER_META_KEY: marked},
+        }
 
     class Folders:
         def load(self, loaded_id, **kwargs):
-            return {
-                "_id": loaded_id,
-                "meta": {utils.JOB_OUTPUT_FOLDER_META_KEY: marked},
-            }
+            return _folderDoc(loaded_id)
+
+        def find(self, query=None, **kwargs):
+            ids = ((query or {}).get("_id") or {}).get("$in", [])
+            return [_folderDoc(i) for i in ids]
 
     monkeypatch.setattr(utils, "Item", Items)
     monkeypatch.setattr(utils, "Folder", Folders)
