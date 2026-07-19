@@ -14,6 +14,14 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$SCRIPT_DIR/.." && pwd)
 SCRATCH="$REPO/e2e/.compat"
 
+# DSA_COMPOSE_PROJECT below names the container whose image we borrow.
+if [ -f "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+
 [ -d "$SCRATCH" ] || { echo "clean-compat: nothing to clean ($SCRATCH does not exist)"; exit 0; }
 
 # Running this as root would chown the scratch to root — the exact state it

@@ -139,9 +139,29 @@ VOLVIEW_WT=$(resolve "$VOLVIEW_ARG" "$VOLVIEW_ROOT" "")
 [ -f "$VOLVIEW_WT/package.json" ] || { echo "VolView worktree not found: $VOLVIEW_WT" >&2; exit 1; }
 
 # A materialized baseline is a `git archive` export: real source, no .git. Its
-# sha is passed in rather than derived; step 6 still proves the mounted tree is
-# what was handed over.
+# sha is passed in rather than derived.
+#
+# Step 6 proves the MOUNT matches the tree it was handed, but that says nothing
+# about whether the tree is the commit being claimed — so on its own --girder-sha
+# would let a wrong value write a receipt that lies, and the e2e deploy guard
+# trusts that receipt completely. Tie the two together here:
+# materialize-baseline.sh stamps every tree it writes with the sha it exported,
+# so a mismatch means the tree is not what the caller says it is.
 if [ -n "$OPT_GIRDER_SHA" ]; then
+    git -C "$REPO" cat-file -e "$OPT_GIRDER_SHA^{commit}" 2>/dev/null || {
+        echo "--girder-sha $OPT_GIRDER_SHA is not a commit in $REPO" >&2; exit 1; }
+    STAMP="$GIRDER_WT/.compat-source.json"
+    if [ -f "$STAMP" ]; then
+        STAMPED=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resolvedSha"])' "$STAMP")
+        [ "$STAMPED" = "$OPT_GIRDER_SHA" ] || {
+            echo "!! $GIRDER_WT was exported from $STAMPED but --girder-sha claims $OPT_GIRDER_SHA" >&2
+            echo "   Refusing to write a receipt that misidentifies the deployed code." >&2
+            exit 1; }
+    else
+        echo "!! --girder-sha given for a tree with no .compat-source.json stamp: $GIRDER_WT" >&2
+        echo "   Only e2e/scripts/materialize-baseline.sh may produce trees deployed this way." >&2
+        exit 1
+    fi
     GIRDER_SHA=$OPT_GIRDER_SHA
     GIRDER_SHORT=${OPT_GIRDER_SHA:0:9}
 else
@@ -150,6 +170,18 @@ else
 fi
 VOLVIEW_SHA=$(git -C "$VOLVIEW_WT" rev-parse HEAD)
 VOLVIEW_SHORT=$(git -C "$VOLVIEW_WT" rev-parse --short HEAD)
+
+# Step 5 registers the radiology CLI, but only for a backend that ships the
+# processing routes. Decide that here, where it costs nothing, rather than
+# discovering a bad CLI_REPO at step 5 of 6 — after a container recreate, a
+# health wait, and a full client build, with the receipt not yet written.
+WITH_CLI=0
+if [ -f "$GIRDER_WT/girder_volview/backend/routes.py" ]; then
+    WITH_CLI=1
+    : "${CLI_REPO:?not set, but the deployed backend ships processing routes — set CLI_REPO in .env}"
+    [ -f "$CLI_REPO/cli_list.json" ] || {
+        echo "CLI_REPO has no cli_list.json: $CLI_REPO (still the .env.example placeholder?)" >&2; exit 1; }
+fi
 
 SERVED=/opt/venv/share/girder/static/built/plugins/volview
 WEB_CLIENT=/opt/girder_volview/girder_volview/web_client
@@ -274,7 +306,7 @@ echo "==> [5/6] register radiology CLI tasks (dropped by the reprovision)"
 # The verify step reads the volview_processing routes, which only exist when
 # the deployed girder_volview ships the processing backend. Pre-processing
 # worktrees (e.g. main, deployed by the compat harness) have none — skip.
-if [ -f "$GIRDER_WT/girder_volview/backend/routes.py" ]; then
+if [ "$WITH_CLI" -eq 1 ]; then
     "$SCRIPT_DIR/ensure-radiology-cli"
 else
     echo "    (deployed girder_volview has no processing backend — skipping radiology CLI registration)"

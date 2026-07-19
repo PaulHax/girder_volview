@@ -24,6 +24,21 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/.." && pwd)
+
+# Sourced here as well as in script/deploy, because this is also a standalone
+# entry point (start-dsa-volview.sh calls it directly). Without this its own
+# CLI_REPO error told you to create a .env that it then never read. Sourcing
+# twice is harmless; already-exported values from a parent deploy win, since
+# .env assignments are plain and the parent exported the same values.
+if [ -f "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+
 GIRDER_URL=${GIRDER_URL:-http://localhost:8080}
 DSA_ADMIN_USER=${DSA_ADMIN_USER:-admin}
 DSA_ADMIN_PASS=${DSA_ADMIN_PASS:-password}
