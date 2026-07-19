@@ -122,13 +122,9 @@ def _parse_default(widget_type, default_el):
     if len(text) == 0:
         return None
     is_template = text[:2] == "{{" and text[-2:] == "}}"
-    if not is_template:
-        return _convert(widget_type, text)
-    defstr = "__default__"
-    converted = _convert(widget_type, defstr)
-    if converted == defstr:
-        return converted
-    return None
+    if is_template:
+        return None
+    return _convert(widget_type, text)
 
 
 # ---------------------------------------------------------------------------

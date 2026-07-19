@@ -240,12 +240,22 @@ def copyStagedInputsIntoJobFolder(params, resolvedInputFiles, user, outputFolder
         # the job against a partial input.
         originals = sorted(Item().childFiles(item), key=lambda f: f.get("name", ""))
         copies = sorted(Item().childFiles(copied), key=lambda f: f.get("name", ""))
-        fileIdRemap.update(
-            {
-                str(orig["_id"]): str(cop["_id"])
-                for orig, cop in zip(originals, copies, strict=True)
-            }
-        )
+        try:
+            fileIdRemap.update(
+                {
+                    str(orig["_id"]): str(cop["_id"])
+                    for orig, cop in zip(originals, copies, strict=True)
+                }
+            )
+        except ValueError:
+            # Same race as the concurrent-delete guard above: the staged item's
+            # files changed between resolution and copy. A typed 409, not the
+            # bare zip() ValueError's opaque 500.
+            raise RestException(
+                "A processing input changed while the submission "
+                "was in progress; please resubmit",
+                code=409,
+            ) from None
     if not fileIdRemap:
         return params, copiedItemIds
     params = dict(params)

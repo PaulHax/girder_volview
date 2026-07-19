@@ -460,6 +460,11 @@ def _scalarProblem(decl, value):
     return None
 
 
+# The ProcessingOutputRequest wire shape: the server owns ``name``
+# (``_autofillOutputs`` overwrites it); ``format`` is the one client-chosen key.
+_OUTPUT_REQUEST_KEYS = frozenset({"name", "format"})
+
+
 def _submitValueProblem(decl, value):
     """Why a submitted value mismatches its CLI declaration, or None."""
     # Declared image/file OUTPUTS are server-composed: the name is overwritten by
@@ -469,6 +474,13 @@ def _submitValueProblem(decl, value):
     if decl["channel"] == "output" and decl["tag"] in ("image", "file"):
         if isinstance(value, dict) and "uris" in value:
             return "output values may not carry uris (outputs are server-composed)"
+        if isinstance(value, dict):
+            # ``_autofillOutputs`` merges every non-name key into the job's
+            # recorded submission, so an unvetted key would ride into the job
+            # document (where a '.'/'$' name breaks the Mongo insert).
+            unknown = sorted(set(value) - _OUTPUT_REQUEST_KEYS)
+            if unknown:
+                return "unexpected output key(s): %s" % ", ".join(unknown)
         return None
     # Declared image/file INPUTS are the client-minted {type, format?, uris}
     # objects; anything else would be stringified and forwarded as garbage.
@@ -561,7 +573,10 @@ def _translateValuesToSlicerParams(values, user, outputFolder, declared=None):
         elif isinstance(value, bool):
             params[paramName] = "true" if value else "false"
         elif isinstance(value, (int, float)):
-            params[paramName] = str(value)
+            # Canonical int form for integral floats: validation accepts 5.0
+            # for an <integer> param (JSON has no int/float split), but the
+            # CLI's argparse int()/enum parsing would reject the "5.0" string.
+            params[paramName] = _formatNumber(value)
         elif isinstance(value, dict) and "uris" in value:
             # A bound input: resolve the backend's own URIs back to file ids
             # (strict validation + ACL re-check) and forward the ids.

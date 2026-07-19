@@ -234,7 +234,7 @@ def test_labelmap_fixture_resolves_through_the_same_path(monkeypatch):
 def test_submit_reuses_resolved_files_for_params_and_transient_detection(monkeypatch):
     file_ids = [str(ObjectId()), str(ObjectId()), str(ObjectId())]
     parent_id = ObjectId()
-    counts = {"fileFind": 0, "itemPermFind": 0, "itemLoad": 0}
+    counts = {"fileFind": 0, "itemPermFind": 0, "itemFind": 0}
 
     class Files:
         def find(self, query=None, **kwargs):
@@ -246,9 +246,9 @@ def test_submit_reuses_resolved_files_for_params_and_transient_detection(monkeyp
             counts["itemPermFind"] += 1
             return [{"_id": i} for i in _query_ids(query)]
 
-        def load(self, itemId, **kwargs):
-            counts["itemLoad"] += 1
-            return {"_id": itemId, "meta": {}}
+        def find(self, query=None, **kwargs):
+            counts["itemFind"] += 1
+            return [{"_id": i, "meta": {}} for i in _query_ids(query)]
 
     monkeypatch.setattr(inputs, "File", Files)
     monkeypatch.setattr(inputs, "Item", Items)
@@ -273,9 +273,21 @@ def test_submit_reuses_resolved_files_for_params_and_transient_detection(monkeyp
     assert params == {"inputVolume": ",".join(file_ids)}
     assert copied == []
     # The batched resolver does one file find + one permission-filtered parent-item
-    # find (never a per-uri load); the copy pass loads the ONE distinct parent item
-    # once for transient detection, reusing the already-resolved docs.
-    assert counts == {"fileFind": 1, "itemPermFind": 1, "itemLoad": 1}
+    # find (never a per-uri load); the copy pass reads the transient markers with
+    # ONE batched find over the distinct parents, reusing the already-resolved docs.
+    assert counts == {"fileFind": 1, "itemPermFind": 1, "itemFind": 1}
+
+
+def test_integral_float_translates_to_canonical_int_form():
+    # Validation accepts 5.0 for an <integer> param (JSON has no int/float
+    # split), so translation must emit "5", not "5.0" — the CLI's argparse
+    # int()/enum parsing rejects the float string. Fractionals pass through.
+    params, _ = submit._translateValuesToSlicerParams(
+        {"iterations": 5.0, "sigma": 2.5},
+        user=object(),
+        outputFolder={"_id": ObjectId()},
+    )
+    assert params == {"iterations": "5", "sigma": "2.5"}
 
 
 def test_reserved_char_named_input_translates_without_400(monkeypatch):

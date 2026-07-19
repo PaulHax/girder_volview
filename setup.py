@@ -5,6 +5,9 @@ with open("README.md") as readme_file:
 
 requirements = [
     "girder>=3",
+    # Job model + REST routes; imported unconditionally at plugin load
+    # (backend/routes.py), not merely transitively via girder-large-image.
+    "girder-jobs>=3",
     "girder-large-image>=1.30.1",
     "pyyaml",
     "pydicom>=2",

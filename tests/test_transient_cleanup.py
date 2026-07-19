@@ -44,6 +44,10 @@ class _RecordingItemModel:
     def find(self, query):
         if self._capture is not None:
             self._capture.append(query)
+        ids = ((query or {}).get("_id") or {}).get("$in")
+        if ids is not None:
+            # The batched transient-marker read: answer by id from itemsById.
+            return [self._items[str(i)] for i in ids if str(i) in self._items]
         return list(self._found)
 
     def remove(self, item):
@@ -296,6 +300,47 @@ def test_copy_raises_conflict_when_parent_item_vanished_mid_submit(monkeypatch):
         inputs.copyStagedInputsIntoJobFolder(
             {"segmentation": str(goneFile["_id"])},
             {"segmentation": [goneFile]},
+            user=object(),
+            outputFolder={"_id": ObjectId()},
+        )
+
+    assert excinfo.value.code == 409
+
+
+def test_partial_copy_raises_conflict_not_bare_valueerror(monkeypatch):
+    # ``copyItem`` must duplicate every child file; a partial copy (a file
+    # added/removed concurrently between resolution and copy) is the same
+    # input-changed race as a vanished parent and takes the same typed 409 —
+    # never zip(strict=True)'s bare ValueError surfacing as an opaque 500.
+    stagedItemId = ObjectId()
+    files = [
+        {"_id": ObjectId(), "name": "a.nrrd", "itemId": stagedItemId},
+        {"_id": ObjectId(), "name": "b.nrrd", "itemId": stagedItemId},
+    ]
+
+    class _PartialCopyItemModel(_CopyingItemModel):
+        def copyItem(self, item, creator=None, folder=None):
+            copied = super().copyItem(item, creator=creator, folder=folder)
+            self._files[str(copied["_id"])].pop()  # the copy came up one file short
+            return copied
+
+    _installItemModel(
+        monkeypatch,
+        _PartialCopyItemModel(
+            itemsById={
+                str(stagedItemId): {
+                    "_id": stagedItemId,
+                    "meta": {TRANSIENT_STAGED_META_KEY: True},
+                }
+            },
+            filesByItemId={stagedItemId: files},
+        ),
+    )
+
+    with pytest.raises(RestException) as excinfo:
+        inputs.copyStagedInputsIntoJobFolder(
+            {"segmentation": ",".join(str(f["_id"]) for f in files)},
+            {"segmentation": files},
             user=object(),
             outputFolder={"_id": ObjectId()},
         )

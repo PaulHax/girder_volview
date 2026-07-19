@@ -33,6 +33,7 @@ from .config import buildProcessingConfigBlock
 from ..utils import (
     SESSION_ZIP_EXTENSION,
     isJobOutputFolderItem,
+    isLaunchFile,
     isLoadableImage,
     primeLoadableImageCaches,
     filesToManifest,
@@ -149,7 +150,12 @@ def _uploadWholeSession(model, parentId, user, errorIdentifier, metadata=None):
     would contradict by restoring the previous zip (or a KeyError -> 500 and an
     orphaned item).
     """
-    size = int(cherrypy.request.headers.get("Content-Length"))
+    try:
+        size = int(cherrypy.request.headers.get("Content-Length"))
+    except (TypeError, ValueError):
+        # Absent (e.g. Transfer-Encoding: chunked) or non-integer header:
+        # the same clean rejection as an empty body, not an int() 500.
+        size = 0
     if size == 0:
         raise GirderException(
             "Expected non-zero Content-Length header", errorIdentifier
@@ -317,14 +323,14 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         files = getFilteredSessionFile(folder, filters, user)
         if files is None:
             files = getFilteredFiles(folder, filters)
-            # Narrow to loadable images: the filter aggregation returns every
-            # matched file, but transient staged inputs and job-output-folder
-            # files must not surface as launch data.
+            # The filter row owns every file it matched — no loadability gate
+            # (grouped DICOM rows carry extensionless slices). Only working
+            # data is excluded: transient staged inputs and session zips.
             primeLoadableImageCaches(files, user, itemCache, folderCache)
             files = [
                 (None, f)
                 for f in files
-                if isLoadableImage(f, user, itemCache, folderCache)
+                if isLaunchFile(f, user, itemCache, folderCache)
             ]
     else:
         # Bare folder-open -> resume the folder's newest session.volview.zip,

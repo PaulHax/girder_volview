@@ -240,3 +240,24 @@ def test_params_surface_is_populated_for_a_real_cli():
     params = parse_cli(xml)["params"]
     assert isinstance(params, list) and params
     assert all("tag" in p and "channel" in p for p in params)
+
+
+# ---------------------------------------------------------------------------
+# <default> template placeholders are skipped for EVERY widget type
+# ---------------------------------------------------------------------------
+
+_parse_default = _spec._parse_default
+
+
+@pytest.mark.parametrize(
+    "widget_type",
+    ["string", "number", "boolean", "string-vector", "number-vector"],
+)
+def test_template_default_is_skipped_for_every_widget_type(widget_type):
+    # A {{template}} placeholder is deployment-side plumbing, not a value; a
+    # leaked literal (e.g. "__default__" or the raw braces) would pre-fill the
+    # client form and ride into a submission.
+    import xml.etree.ElementTree as ET
+
+    default_el = ET.fromstring("<default>{{some_template}}</default>")
+    assert _parse_default(widget_type, default_el) is None

@@ -259,18 +259,31 @@ def isTransientStagedFile(file, user=None, itemCache=None):
     return bool((item or {}).get("meta", {}).get(TRANSIENT_STAGED_META_KEY))
 
 
-def isLoadableImage(file, user=None, itemCache=None, folderCache=None):
-    # Normalized here so the job-output, transient, and loadable checks below
-    # share one parent-item load even when no request-scoped cache is passed.
+def isLaunchFile(file, user=None, itemCache=None, folderCache=None):
+    """Whether ``file`` may surface as launch data at all.
+
+    Excludes only working data — session zips (they resume through their own
+    gestures), job outputs, and transient staged inputs. No loadability gate:
+    a filter row owns every file it matched (e.g. extensionless DICOM slices),
+    so its manifest leg filters with this predicate alone.
+    """
+    # Normalized here so the job-output and transient checks below share one
+    # parent-item load even when no request-scoped cache is passed.
     itemCache = {} if itemCache is None else itemCache
     folderCache = {} if folderCache is None else folderCache
     if isSessionFile(file):
         return False
     if isJobOutputFolderFile(file, user, itemCache, folderCache):
         return False
-    if isTransientStagedFile(file, user, itemCache):
-        return False
-    return isLoadableFile(file, user, itemCache)
+    return not isTransientStagedFile(file, user, itemCache)
+
+
+def isLoadableImage(file, user=None, itemCache=None, folderCache=None):
+    itemCache = {} if itemCache is None else itemCache
+    folderCache = {} if folderCache is None else folderCache
+    return isLaunchFile(file, user, itemCache, folderCache) and isLoadableFile(
+        file, user, itemCache
+    )
 
 
 def primeLoadableImageCaches(fileDocs, user, itemCache, folderCache):

@@ -294,6 +294,25 @@ def test_validate_rejects_output_smuggling_uris():
     )
 
 
+def test_validate_rejects_unknown_output_object_keys():
+    # ``_autofillOutputs`` merges every non-name key into the recorded
+    # submission, so a Mongo-unsafe key name ('a.b', '$where') would break the
+    # job-document insert far from the submitter. Only the
+    # ProcessingOutputRequest wire keys (name, format) may appear.
+    _assert_value_rejected(
+        {"outputVolume": {"name": "x", "a.b": 1}},
+        "outputVolume",
+        "unexpected output key",
+        "a.b",
+    )
+    _assert_value_rejected(
+        {"outputVolume": {"$where": "1"}}, "outputVolume", "$where"
+    )
+    submit._validateDeclaredSubmitValues(
+        {"outputVolume": {"name": "n", "format": "nrrd"}}, _VALUES_DECLARED
+    )
+
+
 def test_validate_values_covers_params_outside_label_sections():
     # The value walk is label-independent, like the key walk: a param declared
     # outside any <label> section is still type-checked (the label-grouped spec

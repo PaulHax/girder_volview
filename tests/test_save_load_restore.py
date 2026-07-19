@@ -83,6 +83,21 @@ def _downloadBytes(fileDoc):
     return b"".join(File().download(fileDoc, headers=False)())
 
 
+def test_save_without_content_length_is_the_clean_rejection_not_500(monkeypatch):
+    # A header-less save (Transfer-Encoding: chunked) or a garbage header value
+    # takes the same typed rejection as an empty body — never int(None)'s
+    # TypeError surfacing as an opaque 500.
+    import cherrypy
+    from girder.exceptions import GirderException
+
+    from girder_volview.backend import launch
+
+    for headers in ({}, {"Content-Length": "abc"}):
+        monkeypatch.setattr(cherrypy.request, "headers", headers, raising=False)
+        with pytest.raises(GirderException):
+            launch._uploadWholeSession(None, "id", None, "err.identifier")
+
+
 # ---------------------------------------------------------------------------
 # 1. Specific picks resume matching sessions and ignore unrelated sessions
 # ---------------------------------------------------------------------------
@@ -135,6 +150,37 @@ def test_filter_pick_ignores_unrelated_session(server, owner, folder):
     names = _resourceNames(resp)
     assert "keep.nrrd" in names
     assert "drop.nrrd" not in names
+    assert not any(n.endswith(".volview.zip") for n in names)
+
+
+@pytest.mark.plugin("volview")
+def test_filter_pick_includes_files_the_loadable_gate_would_drop(server, owner, folder):
+    # A filter row owns its matched files: an extensionless slice (no loadable
+    # extension, octet-stream mime) still belongs to the manifest. Only working
+    # data — transient staged inputs and session zips — is excluded.
+    from girder_volview.utils import TRANSIENT_STAGED_META_KEY
+
+    _uploadFile(folder, owner, "slice001", meta={"pick": "yes"})
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    _uploadFile(
+        folder,
+        owner,
+        "staged.nrrd",
+        meta={"pick": "yes", TRANSIENT_STAGED_META_KEY: True},
+    )
+    _uploadFile(folder, owner, "old.volview.zip", data=b"zip", meta={"pick": "yes"})
+
+    resp = _folderManifest(
+        server,
+        folder,
+        owner,
+        params={"filters": json.dumps([{"meta.pick": "yes"}])},
+        exception=True,
+    )
+    names = _resourceNames(resp)
+    assert "slice001" in names
+    assert "keep.nrrd" in names
+    assert "staged.nrrd" not in names
     assert not any(n.endswith(".volview.zip") for n in names)
 
 

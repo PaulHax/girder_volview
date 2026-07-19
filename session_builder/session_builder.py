@@ -44,6 +44,7 @@ import json
 import uuid
 from pathlib import Path
 from typing import TypedDict
+from urllib.parse import quote
 from girder_client import GirderClient
 
 # Must match a version VolView can migrate to current.
@@ -377,9 +378,14 @@ def serialize_manifest(manifest: dict) -> bytes:
 
 
 def make_file_download_url(api_url: str, file_id: str, file_name: str) -> str:
-    """Build proxiable file download URL."""
+    """Build proxiable file download URL.
+
+    The name is percent-encoded (as the plugin's ``handles.mintFileHandle``
+    does) so reserved URL delimiters in legal Girder file names ('#', '?', '%')
+    cannot truncate or misparse the URI when VolView fetches it.
+    """
     api_url = api_url.rstrip("/")
-    return f"{api_url}/file/{file_id}/proxiable/{file_name}"
+    return f"{api_url}/file/{file_id}/proxiable/{quote(file_name, safe='')}"
 
 
 def get_item_files(gc: GirderClient, item_id: str) -> list[dict]:
