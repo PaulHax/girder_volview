@@ -102,7 +102,12 @@ export async function provisionCompat(
 
   async function dicomFixture(id: FixtureId): Promise<void> {
     const folderId = await createFolderUnder(request, token, 'folder', runRootFolderId, id);
-    seedSmallDicom(folderId);
+    // large_image's grouped recursive endpoint assumes a flattened folder has
+    // at least one descendant. Keep the config and resulting session items at
+    // the scenario root, and put the source slices in a public child folder.
+    // This also matches the hierarchy shape that flatten/group is meant for.
+    const dataFolderId = await createFolderUnder(request, token, 'folder', folderId, 'dicom');
+    seedSmallDicom(dataFolderId);
     await uploadFile(
       request,
       token,
@@ -110,7 +115,7 @@ export async function provisionCompat(
       '.large_image_config.yaml',
       fs.readFileSync(DICOM_LI_CONFIG)
     );
-    const dicomItems = await listItems(request, token, folderId);
+    const dicomItems = await listItems(request, token, dataFolderId);
     const images = dicomItems.filter((item) => item.name.endsWith('.dcm'));
     if (images.length === 0) throw new Error(`[compat] fixture '${id}' contains no DICOM items`);
     fixtures[id] = {

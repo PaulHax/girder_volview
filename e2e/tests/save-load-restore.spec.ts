@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import {
   gotoFolder,
+  loginViaUI,
   checkRowByItemId,
   checkRowByTexts,
   fillFilterBox,
@@ -213,6 +214,9 @@ test.describe('save/load/restore F5 lifecycle', () => {
     const newerFileId = await firstFileId(page.request, g.token, newerId);
     expect(olderFileId).not.toBe(newerFileId);
 
+    // Session items are private even though the fixture folder and raw images
+    // are public. Authenticate the Girder client before browsing those rows.
+    await loginViaUI(page);
     await gotoFolder(page, g.folderId);
     await checkRowByItemId(page, olderId);
     const launch = await openInVolView(page);
@@ -266,6 +270,7 @@ test.describe('save/load/restore F5 lifecycle', () => {
     const sessionId = resumeUrl.split('/item/')[1].split('/volview')[0];
     await checked.view.close();
 
+    await loginViaUI(page);
     await gotoFolder(page, g.folderId);
     await checkRowByItemId(page, sessionId);
     await checkRowByItemId(page, g.itemId);
