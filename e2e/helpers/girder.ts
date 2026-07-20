@@ -85,10 +85,7 @@ export async function countSessionItems(request: APIRequestContext, g: Girder): 
   return (await listSessionItems(request, g.token, g.folderId)).length;
 }
 
-// ---------------------------------------------------------------------------
-// Launch-URL construction — a replica of the plugin launcher
-// (girder_volview/web_client/views/open.js).
-// ---------------------------------------------------------------------------
+// A replica of the plugin launcher (girder_volview/web_client/views/open.js).
 const VOLVIEW = 'static/built/plugins/volview/index.html';
 const enc = encodeURIComponent;
 

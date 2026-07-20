@@ -34,10 +34,6 @@ import sys
 import urllib.request
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 HERE = Path(__file__).parent.resolve()
 DATA_DIR = HERE / "data"
 MANIFEST_PATH = HERE / "manifest" / "series.json"
@@ -141,11 +137,6 @@ META_TAGS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-
 def log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -199,11 +190,6 @@ def s3_client():
         aws_secret_access_key=MINIO_SECRET,
         region_name="us-east-1",
     )
-
-
-# ---------------------------------------------------------------------------
-# select -- pin SeriesInstanceUIDs from IDC
-# ---------------------------------------------------------------------------
 
 
 def pick_trial_series(idx):
@@ -360,11 +346,6 @@ def cmd_select(args) -> None:
     total = sum(p["series_size_MB"] for p in trial + ultrasound)
     n_series = len(trial) + len(ultrasound)
     log(f"\nWrote {MANIFEST_PATH} ({n_series} series, ~{total:.0f} MB)")
-
-
-# ---------------------------------------------------------------------------
-# fetch -- download pinned series and prove the US clips are really cine
-# ---------------------------------------------------------------------------
 
 
 def series_dir(series_uid: str) -> Path:
@@ -533,11 +514,6 @@ Regenerate this file with `uv run seed.py fetch`.
     log(f"  wrote {ATTRIBUTION_PATH}")
 
 
-# ---------------------------------------------------------------------------
-# stage -- lay out the bucket and push to MinIO
-# ---------------------------------------------------------------------------
-
-
 def sorted_slices(files: list[Path]) -> list[Path]:
     """Order a series by InstanceNumber so subsampling stays anatomically sane."""
     import pydicom
@@ -674,11 +650,6 @@ def cmd_stage(args) -> None:
     already = len(plan["objects"]) - uploaded
     log(f"Uploaded {uploaded} objects ({already} already present).")
     log(f"Wrote staging plan to {STAGED_PATH}")
-
-
-# ---------------------------------------------------------------------------
-# seed -- assetstore, import, metadata, configs
-# ---------------------------------------------------------------------------
 
 
 def get_setting(gc, key: str):
@@ -828,8 +799,8 @@ def cmd_seed(args) -> None:
     gc = girder_client()
 
     # The import path fires model.file.save per file, which walks into
-    # large_image's DICOM adjacency scan -- documented O(n^2) blowup in
-    # plans/DICOM_S3_IMPORT_ROOT_CAUSE.md. Off during import, restored after.
+    # large_image's DICOM adjacency scan -- an O(n^2) blowup on large series.
+    # Off during import, restored after.
     previous_auto_set = get_setting(gc, "large_image.auto_set")
     log(f"Disabling large_image.auto_set during import (was {previous_auto_set!r})")
     set_setting(gc, "large_image.auto_set", False)
@@ -859,11 +830,6 @@ def cmd_seed(args) -> None:
         log(f"Restored large_image.auto_set to {previous_auto_set!r}")
 
     log(f"\nSeeded. Open {GIRDER_URL}/#collection/{collection['_id']}")
-
-
-# ---------------------------------------------------------------------------
-# seed-small -- plain-upload a tiny real-DICOM set for the e2e small tier
-# ---------------------------------------------------------------------------
 
 
 def cmd_seed_small(args) -> None:
@@ -933,11 +899,6 @@ def cmd_seed_small(args) -> None:
         f"Seeded small tier into folder {args.folder_id} "
         f"({uploaded} uploaded, {skipped} existing)."
     )
-
-
-# ---------------------------------------------------------------------------
-# verify
-# ---------------------------------------------------------------------------
 
 
 def collect_layout_views(layouts: dict) -> set:
@@ -1125,11 +1086,6 @@ def cmd_verify(args) -> None:
     log(f"\nAll checks passed. Open {GIRDER_URL}/#collection/{collection['_id']}")
 
 
-# ---------------------------------------------------------------------------
-# reset
-# ---------------------------------------------------------------------------
-
-
 def cmd_reset(args) -> None:
     gc = girder_client()
 
@@ -1163,11 +1119,6 @@ def cmd_reset(args) -> None:
         STAGED_PATH.unlink(missing_ok=True)
 
     log("Reset complete.")
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:

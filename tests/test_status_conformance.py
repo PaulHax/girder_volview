@@ -130,12 +130,8 @@ def test_over_100_percent_progress_is_clamped_to_one():
     validator.validate(projected)
 
 
-# ---------------------------------------------------------------------------
 # Poll-load economy: the status load must not drag the unbounded job log on
 # every ~2s poll — the log is (re)loaded only for a terminal-error projection.
-# ---------------------------------------------------------------------------
-
-
 def test_status_load_excludes_log_except_for_error(monkeypatch):
     import girder_jobs.models.job as job_module
 

@@ -39,16 +39,12 @@ def _installReadableFiles(monkeypatch, docs):
     monkeypatch.setattr(inputs, "Item", Items)
 
 
-# ---------------------------------------------------------------------------
-# _terminalTime — terminal status-transition instant (server clock). The wire
-# ``finishedAt`` is ``_toIso(_terminalTime(job))``.
-# ---------------------------------------------------------------------------
-
-
 def _ts(status, when):
     return {"status": status, "time": when}
 
 
+# The wire ``finishedAt`` is ``_toIso(_terminalTime(job))``: the instant of the
+# terminal status transition, on the server clock.
 def test_terminal_time_is_the_terminal_transition_instant():
     from girder_jobs.constants import JobStatus
 
@@ -96,11 +92,6 @@ def test_terminal_time_reflects_error_and_cancelled_terminals():
     }
     assert utils._toIso(results._terminalTime(err)) == "2026-07-03T01:02:03+00:00"
     assert utils._toIso(results._terminalTime(cancelled)) == "2026-07-03T04:05:06+00:00"
-
-
-# ---------------------------------------------------------------------------
-# _projectJobHistorySummary — lightweight durable-history shape
-# ---------------------------------------------------------------------------
 
 
 def _job_history_validator():
@@ -277,11 +268,6 @@ def test_mixed_labelmap_and_report_counts_every_declared_resolving_output(monkey
     }
 
 
-# ---------------------------------------------------------------------------
-# _toIso — the backend's neutral wire instants
-# ---------------------------------------------------------------------------
-
-
 def test_to_iso_tags_naive_utc_and_passes_through_none():
     assert utils._toIso(None) is None
     assert (
@@ -311,11 +297,6 @@ def test_legacy_manifest_carries_no_session_watermark(monkeypatch):
 
     assert set(manifest) == {"resources"}
     assert isinstance(manifest["resources"], list)
-
-
-# ---------------------------------------------------------------------------
-# isJobOutputFolder{Item,File} — the FOLDER-marker launch-manifest exclusion
-# ---------------------------------------------------------------------------
 
 
 def test_is_job_output_folder_item_reads_the_folder_marker(monkeypatch):

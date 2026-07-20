@@ -16,10 +16,6 @@ from pathlib import Path
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Load the pure-stdlib parser without importing the Girder-bound package.
-# ---------------------------------------------------------------------------
-
 _SLICER_SPEC_PATH = (
     Path(__file__).resolve().parent.parent
     / "girder_volview"
@@ -64,6 +60,7 @@ def test_parse_float_without_a_leading_number_is_nan_not_a_raise():
     result = _parse_float("N/A")
     assert result != result  # NaN, matching JS parseFloat — no ValueError
 
+
 _CLI_XML_DIR = Path(__file__).resolve().parent / "slicer_xml"
 
 
@@ -96,9 +93,7 @@ def _output_param(tag, name, channel="output", type_attr=None, ext=None):
     ) % (tag, type_str, ext_str, name_el, channel, tag)
 
 
-# ---------------------------------------------------------------------------
-# category -- stripped <category> text, or None (fail-closed for task scoping)
-# ---------------------------------------------------------------------------
+# category falls back to None, fail-closed for task scoping.
 
 
 def test_category_present_is_returned_stripped():
@@ -116,11 +111,6 @@ def test_category_absent_or_blank_is_none():
 def test_category_unparseable_is_none_not_raised():
     result = parse_cli("<broken")
     assert result == {"category": None, "outputs": [], "params": []}
-
-
-# ---------------------------------------------------------------------------
-# outputs -- {name, tag, isLabel, fileExtensions} for image/file output params
-# ---------------------------------------------------------------------------
 
 
 def test_image_output_descriptor():
@@ -168,10 +158,6 @@ def test_missing_file_extensions_is_empty_string():
         {"name": "report", "tag": "file", "isLabel": False, "fileExtensions": ""},
     ]
 
-
-# ---------------------------------------------------------------------------
-# Real radiology CLI XMLs -- the values the backend actually ships
-# ---------------------------------------------------------------------------
 
 _REAL_CASES = [
     (
@@ -241,10 +227,6 @@ def test_params_surface_is_populated_for_a_real_cli():
     assert isinstance(params, list) and params
     assert all("tag" in p and "channel" in p for p in params)
 
-
-# ---------------------------------------------------------------------------
-# <default> template placeholders are skipped for EVERY widget type
-# ---------------------------------------------------------------------------
 
 _parse_default = _spec._parse_default
 

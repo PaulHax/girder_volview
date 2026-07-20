@@ -4,11 +4,9 @@ set -euo pipefail
 # Recreate the baseline (old) girder_volview tree from git history.
 #
 # The compat suite needs to deploy an OLDER version of this plugin so it can
-# save sessions the way that version did. It used to get that from a second
-# checkout the developer happened to keep next to this one, on the right branch
-# and clean. That is a machine assumption, not a fact about the project, so this
-# script derives the old tree from the one place it genuinely lives: the repo's
-# own history.
+# save sessions the way that version did. The old tree is derived from the repo's
+# own history so the suite does not depend on a second checkout existing on the
+# developer's machine.
 #
 # `git archive` rather than `git worktree add`: the export is ~36 files, it
 # takes milliseconds, and — the deciding reason — it leaves no entry in the

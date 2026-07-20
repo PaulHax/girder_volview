@@ -47,11 +47,6 @@ def _clear_categories_env(monkeypatch):
     monkeypatch.delenv(submit._ALLOWED_CATEGORIES_ENV, raising=False)
 
 
-# ---------------------------------------------------------------------------
-# listTasks scoping — only radiology categories reach the client
-# ---------------------------------------------------------------------------
-
-
 def test_scoped_cli_items_keeps_only_radiology(monkeypatch):
     items = [
         _cli("MedianFilter", "Radiology"),
@@ -65,11 +60,6 @@ def test_scoped_cli_items_keeps_only_radiology(monkeypatch):
     monkeypatch.setattr(submit, "_listCliItems", lambda user: items)
     kept = {c.name for c in submit._scopedCliItems(user="u")}
     assert kept == {"MedianFilter", "OtsuSegmentation", "ThresholdSegmentation"}
-
-
-# ---------------------------------------------------------------------------
-# getTaskSpec / runTask resolution — filtered-out taskId resolves to None (404)
-# ---------------------------------------------------------------------------
 
 
 def test_find_scoped_cli_item_resolves_only_in_scope(monkeypatch):
@@ -93,11 +83,6 @@ def test_find_scoped_cli_item_resolves_only_in_scope(monkeypatch):
     assert submit._findScopedCliItem("missing", "u") is None
 
 
-# ---------------------------------------------------------------------------
-# Fail-closed predicate + category parsing
-# ---------------------------------------------------------------------------
-
-
 def test_task_in_scope_is_fail_closed_and_case_insensitive():
     assert submit._taskInScope(_cli("a", "Radiology"))
     assert submit._taskInScope(_cli("a", "radiology"))  # case-insensitive
@@ -113,11 +98,6 @@ def test_cli_category_parsing():
     assert slicer_spec.parse_cli(_xml())["category"] is None  # no <category>
     assert slicer_spec.parse_cli("")["category"] is None  # empty text
     assert slicer_spec.parse_cli("<broken")["category"] is None  # unparseable
-
-
-# ---------------------------------------------------------------------------
-# Allowed-category set — default + env override (never "unfiltered")
-# ---------------------------------------------------------------------------
 
 
 def test_allowed_categories_default(monkeypatch):

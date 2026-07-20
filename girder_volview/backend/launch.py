@@ -71,11 +71,6 @@ BASE_CONFIG = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Session-zip save (POST item|folder/:id/volview)
-# ---------------------------------------------------------------------------
-
-
 def uploadSession(model, parentId, user, size, metadata=None):
     # modified from girder.api.v1.file.File.initUpload
     parentType = model.__name__.lower()
@@ -220,15 +215,7 @@ def saveToFolder(self, folderId, metadata):
 
     item = Item().load(fileDic["itemId"], user=user, level=AccessType.WRITE, exc=True)
     Item().setMetadata(item, metadata)
-    # The client repoints only its reload (urls=) at this item, so F5 restores
-    # exactly this save; the save target stays folder-scoped and the NEXT save
-    # mints another session item in the folder.
     return _saveResponse(fileDic["itemId"])
-
-
-# ---------------------------------------------------------------------------
-# Launch manifests (GET item|folder/:id/volview) — load exactly what's picked
-# ---------------------------------------------------------------------------
 
 
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
@@ -355,11 +342,6 @@ def downloadResourceManifest(self, folder, folders, items, filters):
             folderCache=folderCache,
         )
     return filesToManifest(files, folder["_id"])
-
-
-# ---------------------------------------------------------------------------
-# Config (GET folder/:id/volview_config/:name)
-# ---------------------------------------------------------------------------
 
 
 def _mergeDictionaries(a, b):

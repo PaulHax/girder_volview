@@ -85,10 +85,6 @@ export async function readSegmentGroupNames(page: Page): Promise<string[]> {
   return (await names.allTextContents()).map((t) => t.trim()).filter(Boolean);
 }
 
-// ---------------------------------------------------------------------------
-// Data module: dataset names, primary selection, and the PET-over-CT layer.
-// ---------------------------------------------------------------------------
-
 const dicomVolumeCard = (page: Page, seriesDescription: string) =>
   page.locator('.v-card', { has: page.locator('.series-desc') }).filter({ hasText: seriesDescription }).first();
 

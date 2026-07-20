@@ -131,10 +131,8 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
       `[e2e] E2E_EXPECT_GIRDER_SHA set: expecting deployed girder ${override.slice(0, 9)}`
     );
   }
-  // Both halves of the comparison must exist, or the guard is not a guard. It
-  // used to be written `expected && receipt.girderSha && expected !== ...`,
-  // which silently passed whenever either side was missing — the two cases
-  // where a wrong deploy is most likely, not least.
+  // Both halves of the comparison must exist, or the guard is not a guard: a
+  // missing sha on either side is when a wrong deploy is most likely, not least.
   if (!receipt.girderSha) {
     throw new Error(
       `[e2e] the deploy receipt at ${RECEIPT_URL} has no girderSha, so it cannot ` +

@@ -34,11 +34,6 @@ STAGE_PATH = "/folder/%s/volview_processing/stage"
 RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
-# ---------------------------------------------------------------------------
-# Real users / folders (shared owner/ownerFolder fixtures live in conftest)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def realJobStub(monkeypatch):
     """Stub the slicer_cli_web touch points so runTask reaches transient marking
@@ -65,11 +60,6 @@ def realJobStub(monkeypatch):
 
     monkeypatch.setattr(routes, "_genDockerJob", fake_gen)
     return cli
-
-
-# ---------------------------------------------------------------------------
-# Request helpers
-# ---------------------------------------------------------------------------
 
 
 def _durable_reference(folder, user):
@@ -161,11 +151,6 @@ def _itemForUri(uri):
     return Item().load(fileDoc["itemId"], force=True)
 
 
-# ---------------------------------------------------------------------------
-# 1. Stage -> a URI that resolves like any other input
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_stage_returns_minted_uri_that_resolves(server, owner, ownerFolder):
     resp = _stage(server, ownerFolder, owner, b"seg-bytes", name="seg.seg.nrrd")
@@ -254,11 +239,6 @@ def test_stage_tag_failure_leaves_no_untagged_item(
     assert resp.output_status.startswith(b"500")
     names = [item["name"] for item in Folder().childItems(ownerFolder)]
     assert "orphan.seg.nrrd" not in names
-
-
-# ---------------------------------------------------------------------------
-# 2. Staged input deleted when its job reaches a terminal state
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -372,11 +352,6 @@ def test_non_transient_input_survives_job_terminal(
     Job().updateJob(job, status=JobStatus.SUCCESS)
 
     assert Item().load(durableItemId, force=True) is not None
-
-
-# ---------------------------------------------------------------------------
-# 3. Orphan sweep — older-than-TTL swept, younger untouched (real Mongo query)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

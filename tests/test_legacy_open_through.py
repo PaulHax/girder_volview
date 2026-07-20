@@ -8,7 +8,8 @@ live cherrypy pipeline:
   folder's raw loadable images instead;
 - **explicit zip open (item route):** a ``session.volview.zip`` item opens as
   its resources list (restore);
-- **empty gesture** (no zip, no loadable images) fails closed at the route;
+- **empty gesture** (no zip, no loadable images) returns a config-only
+  manifest;
 - **merely opening writes NOTHING:** GETs of both manifest routes mutate no
   folder/item/file doc (the read paths are read-only).
 """
@@ -26,12 +27,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures + helpers (shared owner fixture + upload/manifest helpers live in
-# conftest)
-# ---------------------------------------------------------------------------
-
-
+# Shared owner fixture + upload/manifest helpers live in conftest
 @pytest.fixture
 def studyFolder(fsAssetstore, owner):
     from girder.models.folder import Folder
@@ -44,11 +40,6 @@ def studyFolder(fsAssetstore, owner):
 def _legacyManifestFor(fileDoc, folder):
     """The byte-identical legacy ``{resources}`` manifest for one zip file."""
     return filesToManifest([(fileDoc["name"], fileDoc)], folder["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 1. Legacy zip open-through selection (bare folder-open)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -89,11 +80,6 @@ def test_empty_folder_opens_config_only_manifest(server, owner, studyFolder):
     assert [r["name"] for r in resp.json["resources"]] == ["config.json"]
 
 
-# ---------------------------------------------------------------------------
-# 2. Explicit zip open (item route)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_item_route_session_zip_opens_through(server, owner, studyFolder):
     from girder.models.item import Item
@@ -106,11 +92,6 @@ def test_item_route_session_zip_opens_through(server, owner, studyFolder):
     # legacy resources list (restore).
     resp = _itemManifest(server, zipItem, owner, exception=True)
     assert resp.json == _legacyManifestFor(zipFile, studyFolder)
-
-
-# ---------------------------------------------------------------------------
-# 3. Merely opening writes NOTHING
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

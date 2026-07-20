@@ -41,12 +41,7 @@ _CLI_XML = (
 RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
-# ---------------------------------------------------------------------------
-# Real users / folders / files (shared owner/stranger/ownerFolder fixtures
-# live in conftest)
-# ---------------------------------------------------------------------------
-
-
+# Shared owner/stranger/ownerFolder fixtures live in conftest.
 @pytest.fixture
 def strangerFolder(fsAssetstore, stranger):
     from girder.models.folder import Folder
@@ -106,11 +101,6 @@ def _run(server, folder, user, values):
     )
 
 
-# ---------------------------------------------------------------------------
-# Helper-level: real ACL re-check under the submitting user
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_owner_uris_resolve_to_their_file_ids(server, owner, ownerFolder):
     f1 = _upload(owner, ownerFolder, "1-001.dcm")
@@ -155,11 +145,6 @@ def test_runtask_rejects_output_folder_ref(server, owner, ownerFolder, stubCli):
     )
     assert resp.output_status.startswith(b"400")
     assert "params" not in stubCli
-
-
-# ---------------------------------------------------------------------------
-# End-to-end: POST client-minted URIs -> ids -> job
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -265,15 +250,9 @@ def test_runtask_unreadable_file_returns_403(
     assert "params" not in stubCli
 
 
-# ---------------------------------------------------------------------------
-# Submit-boundary reserved-param deny-list (fail closed, 400)
-#
 # A defense separate from the spec-side drop: a crafted submit that feeds a
 # reserved/undeclared param back in is rejected before any job is created, while
 # the backend's own derived {param}_folder plumbing still works.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 @pytest.mark.parametrize("reservedKey", ["girderApiUrl", "girderToken"])
 def test_runtask_rejects_reserved_credential_param(

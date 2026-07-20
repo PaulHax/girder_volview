@@ -31,19 +31,9 @@ pytestmark = pytest.mark.skipif(
 DELETE_PATH = "/volview_processing/jobs/%s"
 
 
-# ---------------------------------------------------------------------------
-# Users / launch folder (shared fixtures + helpers live in conftest)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def launchFolder(ownerFolder):
     return ownerFolder
-
-
-# ---------------------------------------------------------------------------
-# Request helpers
-# ---------------------------------------------------------------------------
 
 
 def _delete(server, jobId, user):

@@ -44,16 +44,6 @@ FOLDER_MANIFEST_PATH = "/folder/%s/volview"
 RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
-# ---------------------------------------------------------------------------
-# Real users / folders (shared fixtures live in conftest)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _makeBoundJob(owner, launchFolder, cli_xml=_CLI_XML_IMAGE):
     """Create the job's REAL private output folder (server-owned, submitter-only
     ADMIN, marked) and a job that owns it by ``_OUTPUT_FOLDER_ID_FIELD``."""
@@ -131,11 +121,6 @@ def _assertValidJobResultsError(payload):
     jsonschema.Draft202012Validator(schema).validate(payload)
 
 
-# ---------------------------------------------------------------------------
-# 1. Real Mongo: 0 / 1 / N outputs each record the right id under its key
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_zero_outputs_records_nothing(server, owner, ownerFolder):
     # A declared-but-unproduced output leaves the recorded map empty (fail closed);
@@ -198,11 +183,6 @@ def test_n_outputs_each_bind_under_their_own_key(server, owner, _make):
     assert resp.json["missing"] == 0
 
 
-# ---------------------------------------------------------------------------
-# 2. End-to-end results route — folder-bound intent, real url + ACL
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_results_route_returns_folder_bound_intent(server, owner, _make):
     job, outputFolder = _make()
@@ -222,11 +202,6 @@ def test_results_route_returns_folder_bound_intent(server, owner, _make):
         intents[0]["url"]
         == "/api/v1/file/%s/proxiable/brain.otsu.nii.gz" % fileDoc["_id"]
     )
-
-
-# ---------------------------------------------------------------------------
-# 3. Honest semantics — typed conflict before readiness, incomplete after loss
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -311,11 +286,6 @@ def test_results_route_partial_miss_returns_survivor_and_missing_count(
     assert resp.json["resultState"] == "incomplete"
 
 
-# ---------------------------------------------------------------------------
-# 4. Ownership never crosses — two jobs own two DISTINCT private output folders
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_two_jobs_output_folders_never_cross(server, owner, ownerFolder):
     # Each job owns its OWN private output folder; an upload correlates ONLY by the
@@ -347,11 +317,6 @@ def test_two_same_name_jobs_do_not_cross_results(server, owner, ownerFolder):
 
     assert respA.json["intents"][0]["id"] == str(fileA["_id"])
     assert respB.json["intents"][0]["id"] == str(fileB["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 5. The private folder is really private
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -418,11 +383,6 @@ def test_output_folder_files_absent_from_ordinary_launch_listing(
     assert "brain.otsu.seg.nrrd" not in names
     # ...yet it stays durable and readable (re-fetched via the job/results path).
     assert File().load(output["_id"], user=owner, level=0, exc=False) is not None
-
-
-# ---------------------------------------------------------------------------
-# 6. First-insert ownership — runTask returns a job that ALREADY owns its folder
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

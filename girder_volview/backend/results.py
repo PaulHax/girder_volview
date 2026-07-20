@@ -20,16 +20,6 @@ from .outputs import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Status projection — the neutral JobStatus → state map (never the girder enum)
-# ---------------------------------------------------------------------------
-
-
-# The worker-state set below is built on first use and cached
-# (``functools.cache``): it depends on girder_worker, an OPTIONAL runtime
-# dependency that may not be importable.
-
-
 @functools.cache
 def _workerActiveStates():
     """girder_worker ``CustomJobStatus`` active-state codes (with numeric fallback).
@@ -94,10 +84,10 @@ def _projectJobState(job):
     """The neutral projected job state (a ``jobStateSchema`` value) from Girder's
     ``JobStatus``.
 
-    The single shared JobStatus->state map, read by BOTH the status projection
-    (``_projectJobStatus``) and the handle projection
-    (``_projectJobHistorySummary``), so both derive state from one source of
-    truth. Neutral names only — never the girder ``JobStatus`` enum on the wire.
+    The single shared JobStatus->state map, reached through ``_projectJobFacts``
+    (and ``_readableOutputFilesForJobs``), so the status and history reads cannot
+    disagree about execution state. Neutral names only — never the girder
+    ``JobStatus`` enum on the wire.
     An unknown status maps to ``"pending"`` (fail closed), except girder_worker's
     active states, which project to ``"running"`` so an active job never regresses.
     Output publication never changes this execution state; ``_projectJobFacts``
@@ -221,11 +211,6 @@ def _projectJobHistorySummary(job, user, readableOutputFiles=None):
     if progress is not None:
         summary["progress"] = progress
     return summary
-
-
-# ---------------------------------------------------------------------------
-# Result intents + collection — reference-bound reads
-# ---------------------------------------------------------------------------
 
 
 def _intentForOutput(out, url, name, jobId):

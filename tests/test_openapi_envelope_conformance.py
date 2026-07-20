@@ -35,8 +35,7 @@ def _envelope_validator(component_name):
     The whole OpenAPI document is the validation resource, and a top-level
     ``$ref`` targets the component; nested ``$ref``s (e.g. ``RunTaskRequest`` ->
     ``InputValue``, ``JobRef`` -> ``NeutralJobStatus``) resolve against the SAME
-    document. Loads straight from the contract rather than hand-copying schema
-    JSON, which would fork the single source.
+    document.
     """
     doc = contract_loader.load_openapi()
     schema = dict(doc)
@@ -75,11 +74,6 @@ _WIRE_COMPONENTS_VALIDATED_ELSEWHERE = {
 }
 
 
-# ---------------------------------------------------------------------------
-# TaskSummary — the listTasks item, built by the REAL backend builder
-# ---------------------------------------------------------------------------
-
-
 def _stub_cli_item():
     # Carries exactly the members `_cliItemToSummary` reads, so the REAL builder
     # produces the wire payload.
@@ -103,11 +97,6 @@ def test_task_summary_requires_id_and_title():
     validator = _envelope_validator("TaskSummary")
     with pytest.raises(jsonschema.ValidationError):
         validator.validate({"title": "no id"})
-
-
-# ---------------------------------------------------------------------------
-# RunTaskRequest — the submit body the client POSTs (`{ values }`)
-# ---------------------------------------------------------------------------
 
 
 def test_run_task_request_with_input_and_scalars_validates():
@@ -149,11 +138,6 @@ def test_run_task_request_rejects_unknown_top_level_member():
         validator.validate({"values": {}, "taskId": "smuggled"})
 
 
-# ---------------------------------------------------------------------------
-# JobRef — the runTask response (`{ jobId }`, optional born-terminal `status`)
-# ---------------------------------------------------------------------------
-
-
 def test_job_ref_bare_id_validates():
     # The reference backend returns exactly `{jobId}`; `status` is the OPTIONAL
     # born-terminal fast-path, so omitting it stays compatible.
@@ -172,11 +156,6 @@ def test_job_ref_requires_job_id():
         validator.validate({"status": {"state": "success"}})
 
 
-# ---------------------------------------------------------------------------
-# StageResponse — the stageInput response (`{ uris: [...] }`, >= 1, fail closed)
-# ---------------------------------------------------------------------------
-
-
 def test_stage_response_validates():
     payload = {"uris": ["/api/v1/file/6600000000000000000000b1/proxiable/scan.nrrd"]}
     _envelope_validator("StageResponse").validate(payload)
@@ -188,13 +167,6 @@ def test_stage_response_empty_uris_is_rejected():
     validator = _envelope_validator("StageResponse")
     with pytest.raises(jsonschema.ValidationError):
         validator.validate({"uris": []})
-
-
-# ---------------------------------------------------------------------------
-# JobResults — the getJobResults readiness envelope, validated against the
-# openapi-embedded copy. Each `intents` item is the ONE canonical result-list
-# item: id/name/url required, plus optional/null metadata.
-# ---------------------------------------------------------------------------
 
 
 # Mirrors _collectJobResults: each item is the neutral intent carrying its
@@ -248,11 +220,6 @@ def test_job_results_rejects_an_intents_item_without_id():
                 "missing": 0,
             }
         )
-
-
-# ---------------------------------------------------------------------------
-# Audit guard: EVERY published component has a validating consumer
-# ---------------------------------------------------------------------------
 
 
 def test_every_openapi_component_has_a_validating_consumer():

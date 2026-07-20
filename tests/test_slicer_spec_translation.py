@@ -24,10 +24,6 @@ import pytest
 import contract_loader
 
 
-# ---------------------------------------------------------------------------
-# Load the pure-stdlib translator without importing the Girder-bound package.
-# ---------------------------------------------------------------------------
-
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _SLICER_SPEC_PATH = _BACKEND_ROOT / "girder_volview" / "backend" / "slicer_spec.py"
 
@@ -91,12 +87,6 @@ def _task_spec_validator():
     return jsonschema.Draft202012Validator(schema)
 
 
-# ---------------------------------------------------------------------------
-# Positive conformance: translate(source XML) == golden fixture, and the
-# translated spec is itself schema-valid (the two-sided honesty check).
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("xml_path,task_id,stem", _CONFORMANCE_CASES, ids=_CASE_IDS)
 def test_translation_reproduces_golden_fixture(xml_path, task_id, stem):
     spec = translate_slicer_xml(xml_path.read_text(), task_id)
@@ -111,13 +101,9 @@ def test_translated_spec_validates_against_generated_schema(xml_path, task_id, s
     validator.validate(spec)  # raises jsonschema.ValidationError if invalid
 
 
-# ---------------------------------------------------------------------------
-# The image-type -> accepts binding. The fixtures exercise the
-# ``scalar``/absent -> ["image"] branch on inputs and ``label`` -> "labelmap"
-# on outputs; the input ``label`` -> ["labelmap"] branch (the labelmap-input
-# CLI) is locked here.
-# ---------------------------------------------------------------------------
-
+# The fixtures exercise the ``scalar``/absent -> ["image"] branch on inputs and
+# ``label`` -> "labelmap" on outputs; the input ``label`` -> ["labelmap"] branch
+# (the labelmap-input CLI) is locked here.
 _LABELMAP_INPUT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <executable>
   <title>Labelmap Input</title>
@@ -142,14 +128,10 @@ def test_input_image_label_type_accepts_labelmap():
     assert source_ref["accepts"] == ["labelmap"]
 
 
-# ---------------------------------------------------------------------------
-# Girder injection params are dropped. A CLI that fetches its own inputs
-# declares ``girderApiUrl``/``girderToken`` as ``<string>`` params so
-# ``slicer_cli_web`` can inject them at run time; these are server plumbing and
-# must never surface as client task params. Skipping them must also not perturb
-# the remaining params' order numbers.
-# ---------------------------------------------------------------------------
-
+# A CLI that fetches its own inputs declares ``girderApiUrl``/``girderToken`` as
+# ``<string>`` params so ``slicer_cli_web`` can inject them at run time; these are
+# server plumbing and must never surface as client task params. Skipping them must
+# also not perturb the remaining params' order numbers.
 _GIRDER_TOKEN_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <executable>
   <title>Token Params</title>
@@ -204,13 +186,10 @@ def test_dropping_token_params_preserves_order_numbers():
     assert by_id["radius"]["order"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Fail closed: an <image> type that is neither absent/scalar nor label, and any
-# unmapped element tag, are emitted as an *unknown field kind* (never coerced
-# into sourceRef, never dropped) so the client's schema validation rejects the
-# whole spec -- the shape the negative fixture pins.
-# ---------------------------------------------------------------------------
-
+# An <image> type that is neither absent/scalar nor label, and any unmapped
+# element tag, are emitted as an *unknown field kind* (never coerced into
+# sourceRef, never dropped) so the client's schema validation rejects the whole
+# spec -- the shape the negative fixture pins.
 _UNKNOWN_IMAGE_TYPE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <executable>
   <title>Unknown Image Type</title>
@@ -269,11 +248,6 @@ def test_unmapped_element_tag_is_unknown_kind_and_fails_closed():
     assert not validator.is_valid(spec)
 
 
-# ---------------------------------------------------------------------------
-# Negative golden fixtures -- the backend side of "fail closed".
-# ---------------------------------------------------------------------------
-
-
 def test_unknown_field_kind_fixture_rejected_by_schema():
     validator = _task_spec_validator()
     bad = contract_loader.load_fixture("negative/unknown-field-kind.json")
@@ -290,13 +264,10 @@ def test_constraint_violation_fixture_is_self_inconsistent():
     assert radius["default"] > radius["max"]
 
 
-# ---------------------------------------------------------------------------
-# <region> -> bounds coordinate conversion. No shipped CLI carries a
-# <region> default, so the synthetic fixture pins only the structural mapping
-# (bounds, no default); the RAS-center/radius -> LPS-min/max convention chosen
-# for a *present* default is locked here (see slicer_spec._region_default_to_bounds).
-# ---------------------------------------------------------------------------
-
+# No shipped CLI carries a <region> default, so the synthetic fixture pins only
+# the structural mapping (bounds, no default); the RAS-center/radius ->
+# LPS-min/max convention chosen for a *present* default is locked here
+# (see slicer_spec._region_default_to_bounds).
 _REGION_DEFAULT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <executable>
   <title>Region Default</title>
@@ -332,14 +303,10 @@ def test_malformed_region_default_is_omitted_fail_closed():
     validator.validate(spec)  # still a valid spec -- only the default dropped
 
 
-# ---------------------------------------------------------------------------
-# bounds -> region (the SUBMIT direction). The client mints a crop box as an LPS
-# min/max box, but a Slicer <region> CLI param expects RAS center+radius. The
-# submit boundary inverts _region_default_to_bounds; this pins that inverse
-# (round-trip identity) and its fail-closed behavior. Applied to a live
-# submission in test_submit_param_guards.py.
-# ---------------------------------------------------------------------------
-
+# The client mints a crop box as an LPS min/max box, but a Slicer <region> CLI
+# param expects RAS center+radius. The submit boundary inverts
+# _region_default_to_bounds; this pins that inverse (round-trip identity) and its
+# fail-closed behavior. Applied to a live submission in test_submit_param_guards.py.
 _bounds_to_region = _translator._bounds_to_region
 _region_default_to_bounds = _translator._region_default_to_bounds
 
@@ -367,14 +334,11 @@ def test_bounds_to_region_fails_closed_on_non_six_finite():
     assert _bounds_to_region([1, 2, 3, 4, 5, float("nan")]) is None
 
 
-# ---------------------------------------------------------------------------
-# Messy numeric <default>/<constraints> values. _parse_float deliberately
-# degrades an unparseable string to NaN (parseFloat parity); the translate
-# boundary must then drop the value as absent -- int(nan) raises and Girder's
-# JSON encoder rejects NaN (allow_nan=False), so a NaN reaching the spec 500s
-# the whole task-spec endpoint instead of degrading one field.
-# ---------------------------------------------------------------------------
-
+# _parse_float deliberately degrades an unparseable string to NaN (parseFloat
+# parity); the translate boundary must then drop the value as absent -- int(nan)
+# raises and Girder's JSON encoder rejects NaN (allow_nan=False), so a NaN
+# reaching the spec 500s the whole task-spec endpoint instead of degrading one
+# field.
 _MESSY_NUMERIC_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <executable>
   <title>Messy Numerics</title>

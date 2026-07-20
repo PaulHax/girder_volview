@@ -85,9 +85,6 @@ require_volview_sha() {
         die "$label VolView is at $actual, but the compatibility pin requires $expected ($checkout)"
 }
 
-# ---------------------------------------------------------------------------
-# Preflight
-# ---------------------------------------------------------------------------
 [[ -x $DEPLOY ]] || die "deploy script not found/executable: $DEPLOY (set COMPAT_DEPLOY)"
 command -v uv >/dev/null || die "uv is required (seed.py seed-small runs via 'uv run')"
 [[ -f $MANIFEST ]] || die "missing $MANIFEST"
@@ -130,9 +127,6 @@ fi
 echo "compat: baseline ${MAIN_SHA:0:9} at $BASELINE_DIR (VolView: ${BASELINE_VOLVIEW_SHA:0:9} at $BASELINE_VOLVIEW)"
 echo "compat: branch   ${BRANCH_SHA:0:9} at $REPO (VolView: ${BRANCH_VOLVIEW_SHA:0:9} at $BRANCH_VOLVIEW)"
 
-# ---------------------------------------------------------------------------
-# Phases
-# ---------------------------------------------------------------------------
 run_capture() {
     echo "compat: ensuring the small-tier DICOM cache (fetch --small is idempotent)..."
     uv run "$E2E/seed/seed.py" fetch --small

@@ -1,6 +1,6 @@
 """Offline unit coverage for the submit-boundary parameter guards.
 
-Three clusters, all documented in ``backend/submit.py``:
+Clusters, all documented in ``backend/submit.py``:
 
 * ``_autofillOutputs`` -- output ``name`` is server-owned, and every composed
   component (including the one derived from a client-minted handle, whose
@@ -10,7 +10,11 @@ Three clusters, all documented in ``backend/submit.py``:
 * ``_validateDeclaredSubmitValues`` -- a declared key whose value mismatches the
   declaration is a 400 naming the parameter (scalar type, ``<constraints>``
   range, enumeration membership, vector elements, an input object with no
-  ``uris``, and a declared OUTPUT smuggling ``uris``).
+  ``uris``, and a declared OUTPUT smuggling ``uris``);
+* ``_translateValuesToSlicerParams`` -- region/bounds values translate to the
+  Slicer wire form;
+* ``_rejectMissingRequiredParams`` -- an undeclared-but-required parameter is a
+  400.
 """
 
 import pytest
@@ -35,11 +39,6 @@ _CLI_XML = (
 # helpers; the tests derive them the same way at module load.
 _CLI_OUTPUTS = slicer_spec.parse_cli(_CLI_XML)["outputs"]
 _CLI_DECLARED = slicer_spec.declared_params(_CLI_XML)
-
-
-# ---------------------------------------------------------------------------
-# Server-owned output names
-# ---------------------------------------------------------------------------
 
 
 def test_autofill_discards_client_output_name_traversal():
@@ -110,11 +109,6 @@ def test_candidate_output_name_sanitizes_all_components():
     assert name == "passwd.cli.param.nii.gz"
 
 
-# ---------------------------------------------------------------------------
-# Reject undeclared submission keys
-# ---------------------------------------------------------------------------
-
-
 def test_declared_param_names_reads_inputs_outputs_and_scalars():
     assert set(slicer_spec.declared_params(_CLI_XML)) == {
         "inputVolume",
@@ -163,10 +157,6 @@ def test_reject_undeclared_param_tolerates_empty_and_none():
     submit._rejectUndeclaredSubmitParams({}, _CLI_DECLARED)
     submit._rejectUndeclaredSubmitParams(None, _CLI_DECLARED)
 
-
-# ---------------------------------------------------------------------------
-# Validate declared values against the CLI declaration
-# ---------------------------------------------------------------------------
 
 # One param of every validated shape: typed scalars (with <constraints>), both
 # enumeration flavors, both vector flavors, a client-minted input, and a
@@ -337,13 +327,11 @@ def test_validate_values_covers_params_outside_label_sections():
     submit._validateDeclaredSubmitValues({"radius": 3}, declared)
 
 
-# ---------------------------------------------------------------------------
 # A <region> param's client bounds box is inverted to Slicer's RAS
 # center+radius grammar at submit. The client mints the crop box as an LPS
 # min/max box; the generic list branch would comma-join it verbatim, feeding the
 # CLI min/max where it reads center/radius (wrong spatial region, silently). The
 # region branch is driven by the DECLARED tag, and a malformed box fails closed.
-# ---------------------------------------------------------------------------
 
 _REGION_CLI_XML = (
     '<?xml version="1.0"?>'
@@ -380,10 +368,6 @@ def test_region_bounds_fail_closed_on_malformed_box():
         assert exc.value.code == 400
         assert "roi" in str(exc.value)
 
-
-# ---------------------------------------------------------------------------
-# Required (indexed) params -- presence enforced at the boundary
-# ---------------------------------------------------------------------------
 
 _INDEXED_CLI_XML = (
     '<?xml version="1.0"?>'

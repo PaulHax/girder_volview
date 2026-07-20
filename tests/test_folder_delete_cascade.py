@@ -43,19 +43,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ---------------------------------------------------------------------------
-# Users / launch folder (shared fixtures + helpers live in conftest)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def launchFolder(ownerFolder):
     return ownerFolder
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _container(launchFolder):
@@ -68,11 +58,6 @@ def _container(launchFolder):
             "name": routes.JOBS_CONTAINER_NAME,
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# 1. Output folders nest inside ONE marked volview-jobs container
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -131,11 +116,6 @@ def test_output_folder_acl_failure_removes_partial_folder(
     )
 
 
-# ---------------------------------------------------------------------------
-# 2. Deleting a terminal job's folder deletes the job (+ sweeps staged inputs)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_folder_delete_removes_job_and_staged_inputs(server, owner, launchFolder):
     from girder.models.folder import Folder
@@ -151,11 +131,6 @@ def test_folder_delete_removes_job_and_staged_inputs(server, owner, launchFolder
     # The reverse cascade routed through JobModel.remove, so the job-side sweep
     # still cleaned the staged input.
     assert not _itemExists(stagedItemId)
-
-
-# ---------------------------------------------------------------------------
-# 3. Deleting the container clears every (terminal) job
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -177,11 +152,6 @@ def test_container_delete_clears_all_jobs(server, owner, launchFolder):
     assert _folderExists(launchFolder["_id"])
 
 
-# ---------------------------------------------------------------------------
-# 4. A LIVE job's folder cannot be deleted — model-level (shell) guard
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_live_job_folder_model_remove_is_blocked(server, owner, launchFolder):
     from girder.exceptions import RestException
@@ -197,12 +167,6 @@ def test_live_job_folder_model_remove_is_blocked(server, owner, launchFolder):
     assert _jobExists(job["_id"])
     # Ownership is intact, so the normal delete works once the job settles.
     assert _reload(job)[outputs._OUTPUT_FOLDER_ID_FIELD] == str(outputFolder["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 5. REST pre-guard: a live job 409s BEFORE any contents are cleaned — for the
-#    job folder itself and for the container holding it
-# ---------------------------------------------------------------------------
 
 
 def _restDeleteFolder(server, folderId, user):
@@ -243,11 +207,6 @@ def test_live_job_folder_rest_delete_409s_before_cleaning(
     assert not _jobExists(job["_id"])
 
 
-# ---------------------------------------------------------------------------
-# 6. The job-side cascade (VolView delete) still works — no re-entry loop
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_job_delete_still_cascades_folder_without_reentry(
     server, owner, launchFolder
@@ -264,11 +223,6 @@ def test_job_delete_still_cascades_folder_without_reentry(
     assert not _folderExists(outputFolder["_id"])
     # No leaked in-progress markers.
     assert outputs._CASCADING_FOLDER_IDS == set()
-
-# ---------------------------------------------------------------------------
-# 7. Ownership is authoritative: an UNMARKED ancestor delete (the launch
-#    folder) and a stripped marker still 409 while a nested job is live
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -314,11 +268,6 @@ def test_live_job_guard_survives_stripped_marker(server, owner, launchFolder):
     assert _jobExists(job["_id"])
 
 
-# ---------------------------------------------------------------------------
-# 8. A failed job removal restores the ownership pointer (retryable delete)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_failed_job_remove_restores_folder_pointer(
     server, owner, launchFolder, monkeypatch
@@ -346,11 +295,6 @@ def test_failed_job_remove_restores_folder_pointer(
     Folder().remove(Folder().load(outputFolder["_id"], force=True))
     assert not _folderExists(outputFolder["_id"])
     assert not _jobExists(job["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 9. A user's pre-existing volview-jobs folder is never adopted as the container
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -428,12 +372,6 @@ def test_container_create_race_does_not_adopt(server, owner, launchFolder, monke
     reloaded = Folder().load(userFolder["_id"], force=True)
     assert not (reloaded.get("meta") or {}).get(JOB_OUTPUT_FOLDER_META_KEY)
     assert _itemExists(keepsake["_id"])
-
-
-# ---------------------------------------------------------------------------
-# 10. Every recursive deletion entry point gets the live-job preflight:
-#     collection delete, user delete, and the batch /resource route
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

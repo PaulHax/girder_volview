@@ -77,12 +77,9 @@ export async function remoteSave(page: Page): Promise<string> {
   return resumeUrl;
 }
 
-// ---------------------------------------------------------------------------
-// Jobs / processing apply path. The Jobs module tab appears only when the launch
-// config= registered a processing provider; its job list is folder+user scoped.
-// ---------------------------------------------------------------------------
-
-// Click a module tab by name (Jobs / Annotations / Rendering / Data).
+// Click a module tab by name (Jobs / Annotations / Rendering / Data). The Jobs
+// tab appears only when the launch config= registered a processing provider;
+// its job list is folder+user scoped.
 export async function openModuleTab(page: Page, name: string): Promise<void> {
   await page.locator(`button[data-testid="module-tab-${name}"]`).click();
 }
@@ -103,12 +100,6 @@ export async function loadJobResults(page: Page): Promise<void> {
     'no result count on the job row after Load'
   ).toBeVisible();
 }
-
-// ---------------------------------------------------------------------------
-// Live submission path (the UI flow, distinct from the come-back "Load"
-// path above): task picker -> task form -> provenance binding -> Submit -> poll
-// -> live auto-apply.
-// ---------------------------------------------------------------------------
 
 // Select a registered task in the Jobs tab's TaskPicker (a v-select labelled
 // "Task"), matching by title prefix (e.g. "Otsu"). Vuetify's floating label is
@@ -136,7 +127,6 @@ export async function waitForInputBound(page: Page, timeout = 30_000): Promise<v
   ).toBeVisible({ timeout });
 }
 
-// Submit the task from the form (a plain "Submit" button).
 export async function submitTaskFromForm(page: Page): Promise<void> {
   const submit = page
     .locator('.jobs-module')

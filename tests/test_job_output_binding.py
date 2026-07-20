@@ -27,11 +27,6 @@ _SPECS = outputs_mod._OUTPUT_SPECS_FIELD
 _FOLDER = outputs_mod._OUTPUT_FOLDER_ID_FIELD
 
 
-# ---------------------------------------------------------------------------
-# Fakes (no live Girder)
-# ---------------------------------------------------------------------------
-
-
 class _FakeJob:
     """Job() stand-in: ``findOne`` by output-folder id, ``updateJob`` records the
     otherFields it was called with AND applies dotted keys into a nested map so a
@@ -164,12 +159,6 @@ def _bindingSetup(monkeypatch, folderId="folder-1", itemId="item-1", specs=None)
     return job, model
 
 
-# ---------------------------------------------------------------------------
-# _parseOutputReference — fail closed on anything that is not a well-formed,
-# safe output reference
-# ---------------------------------------------------------------------------
-
-
 def test_parse_reference_accepts_slicer_shaped_ref():
     ref = outputs_mod._parseOutputReference(
         json.dumps({"slicer_cli_web": {}, "identifier": "outVol", "uuid": "u"})
@@ -199,9 +188,7 @@ def test_parse_reference_rejects_operator_or_dotted_identifier():
     assert outputs_mod._parseOutputReference(json.dumps({"identifier": "$set"})) is None
 
 
-# ---------------------------------------------------------------------------
-# _declaredOutputIdentifiers — the set an upload identifier must belong to
-# ---------------------------------------------------------------------------
+# _declaredOutputIdentifiers: the set an upload identifier must belong to.
 
 
 def test_declared_identifiers_reads_the_spec_names():
@@ -213,12 +200,6 @@ def test_declared_identifiers_empty_without_specs():
     assert outputs_mod._declaredOutputIdentifiers({}) == set()
     assert outputs_mod._declaredOutputIdentifiers(None) == set()
     assert outputs_mod._declaredOutputIdentifiers({_SPECS: "not-a-list"}) == set()
-
-
-# ---------------------------------------------------------------------------
-# _jobForOutputFolder — correlate an upload to a job by its private parent folder
-# (the SOLE correlation key; no token, no caller-supplied jobId)
-# ---------------------------------------------------------------------------
 
 
 def test_job_for_folder_correlates_by_output_folder_id(monkeypatch):
@@ -238,12 +219,6 @@ def test_job_for_folder_uncorrelated_is_none(monkeypatch):
     _installJob(monkeypatch, _FakeJob([_folderJob("folder-1", [_spec("o")])]))
     assert outputs_mod._jobForOutputFolder("other-folder") is None
     assert outputs_mod._jobForOutputFolder(None) is None
-
-
-# ---------------------------------------------------------------------------
-# _recordJobOutput — upload finalization synchronously records ids onto the job,
-# correlated ONLY by the finalized file's actual private parent folder
-# ---------------------------------------------------------------------------
 
 
 def test_record_output_binds_file_under_identifier(monkeypatch):
@@ -391,11 +366,6 @@ def test_record_output_propagates_matched_binding_failure(monkeypatch):
         )
 
 
-# ---------------------------------------------------------------------------
-# Initial submission fields — specs, the output-folder id, and the empty map
-# ---------------------------------------------------------------------------
-
-
 def test_prepare_submission_fields_records_specs_folder_and_empty_map():
     xml = (
         "<executable><parameters>"
@@ -425,11 +395,6 @@ def test_prepare_submission_fields_records_specs_folder_and_empty_map():
     assert fields["volviewSubmissionId"] == "sub-1"
 
 
-# ---------------------------------------------------------------------------
-# _projectJobStatus — execution and synchronous output-publication states
-# ---------------------------------------------------------------------------
-
-
 def test_status_success_with_unrecorded_declared_output_is_incomplete():
     job = {
         "_id": ObjectId(),
@@ -455,11 +420,6 @@ def test_status_running_job_waits_for_results():
         _OUTPUTS: {},
     }
     assert results_mod._projectJobStatus(job)["resultState"] == "waiting"
-
-
-# ---------------------------------------------------------------------------
-# _collectJobResults — reads ids OFF the job, counts missing, never name-matches
-# ---------------------------------------------------------------------------
 
 
 def test_collect_reads_ids_off_the_job(monkeypatch):
@@ -576,12 +536,6 @@ def test_collect_labelmap_carries_no_segments_payload(monkeypatch):
     assert "segments" not in results[0]
 
 
-# ---------------------------------------------------------------------------
-# _jobResultsPayload — honest semantics (non-succeeded/total-loss -> error;
-# succeeded -> {intents, missing} envelope)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "status",
     [
@@ -643,7 +597,6 @@ def test_payload_partial_loss_returns_resolved_and_missing_count(monkeypatch):
         {"outA": str(live), "outB": str(ObjectId())}, [_spec("outA"), _spec("outB")]
     )
     payload = results_mod._jobResultsPayload(job, user=None)
-    # The survivor rides `intents`; the deleted output rides the `missing` count.
     assert len(payload["intents"]) == 1
     assert payload["missing"] == 1
     assert payload["resultState"] == "incomplete"

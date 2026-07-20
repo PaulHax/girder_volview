@@ -39,11 +39,6 @@ _CASES = [(case["name"], case["escaped"]) for case in _CORPUS["cases"]]
 _CASE_IDS = [name for name, _ in _CASES]
 
 
-# ---------------------------------------------------------------------------
-# Mint: the name segment is percent-encoded (the contract's handle-format pin)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("name,escaped", _CASES, ids=_CASE_IDS)
 def test_mint_percent_encodes_the_name_segment(name, escaped):
     fileId = str(ObjectId())
@@ -73,11 +68,6 @@ def test_mint_of_parse_round_trips_exemplar_handles_byte_for_byte(handle):
     assert handles.mintFileHandle(*parsed) == handle
 
 
-# ---------------------------------------------------------------------------
-# One module: every mint/parse surface is a delegate, never a re-derivation
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("name,escaped", _CASES, ids=_CASE_IDS)
 def test_make_file_download_url_delegates_to_the_handle_module(name, escaped):
     fileId = ObjectId()
@@ -91,11 +81,6 @@ def test_file_id_from_minted_uri_reads_every_corpus_mint(name, escaped):
     fileId = str(ObjectId())
     minted = handles.mintFileHandle(fileId, name)
     assert inputs._fileIdFromMintedUri(minted) == fileId
-
-
-# ---------------------------------------------------------------------------
-# Wire compatibility: legacy raw-name handles still parse
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -117,11 +102,6 @@ def test_legacy_raw_name_handles_still_resolve_the_same_file(rawName):
     assert parsed is not None
     assert parsed[0] == fileId
     assert inputs._fileIdFromMintedUri(legacy) == fileId
-
-
-# ---------------------------------------------------------------------------
-# Fail closed: foreign shapes stay rejected, inert passthrough preserved
-# ---------------------------------------------------------------------------
 
 
 # A FIXED placeholder id keeps these parametrize values byte-identical across

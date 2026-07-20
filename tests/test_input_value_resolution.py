@@ -79,11 +79,6 @@ def _acceptAll(monkeypatch):
     monkeypatch.setattr(inputs, "Item", lambda: _AcceptAllItem())
 
 
-# ---------------------------------------------------------------------------
-# _fileIdFromMintedUri — strict own-scheme validation (fail closed)
-# ---------------------------------------------------------------------------
-
-
 def test_recovers_id_from_own_scheme_uri():
     fid = str(ObjectId())
     assert inputs._fileIdFromMintedUri(_mint(fid)) == fid
@@ -149,14 +144,10 @@ def test_parses_against_configured_api_root_not_a_literal(monkeypatch):
     assert inputs._fileIdFromMintedUri(_mint(fid, apiRoot="api/v1")) is None
 
 
-# ---------------------------------------------------------------------------
-# Input-value wire conformance: the golden input-value fixtures are a validating
-# consumer of the generated ``input-value.schema.json`` — the backend-side
-# stand-in for the normative zod ``inputValueSchema`` (one normative definition,
-# two validators). ``jsonschema`` is a hard test dep: a missing validator FAILS,
-# never silently skips.
-# ---------------------------------------------------------------------------
-
+# The golden input-value fixtures are a validating consumer of the generated
+# ``input-value.schema.json`` — the backend-side stand-in for the normative zod
+# ``inputValueSchema`` (one normative definition, two validators). ``jsonschema``
+# is a hard test dep: a missing validator FAILS, never silently skips.
 _INPUT_VALUE_FIXTURES = (
     "wire/input-value.dicom-series.json",
     "wire/input-value.single-file.json",
@@ -190,11 +181,6 @@ def test_input_value_rejects_unknown_member():
         validator.validate(
             {"type": "image", "uris": ["/api/v1/file/x/proxiable/y"], "role": "base"}
         )
-
-
-# ---------------------------------------------------------------------------
-# Translate the golden input-value fixtures → forwarded file ids
-# ---------------------------------------------------------------------------
 
 
 def test_dicom_series_fixture_forwards_comma_joined_ids(monkeypatch):
@@ -306,11 +292,6 @@ def test_reserved_char_named_input_translates_without_400(monkeypatch):
     assert params == {"inputVolume": fid}
 
 
-# ---------------------------------------------------------------------------
-# Fail-closed submit paths
-# ---------------------------------------------------------------------------
-
-
 def test_foreign_uri_in_value_rejected_400(monkeypatch):
     _acceptAll(monkeypatch)
     value = {
@@ -373,11 +354,6 @@ def test_scheme_validation_precedes_acl(monkeypatch):
             {"in": value}, user=object(), outputFolder={"_id": ObjectId()}
         )
     assert exc.value.code == 400
-
-
-# ---------------------------------------------------------------------------
-# Non-input values still translate; output naming reads the new input shape
-# ---------------------------------------------------------------------------
 
 
 def test_scalars_and_outputs_translate():
@@ -450,11 +426,6 @@ def test_first_input_base_name_derives_from_input_uri():
     assert submit._firstInputBaseName({"in": value}) == "scan"
     assert submit._firstInputBaseName({"threshold": 5}) == "output"
     assert submit._firstInputBaseName({}) == "output"
-
-
-# ---------------------------------------------------------------------------
-# Retired grouping/assembly machinery stays absent, and is not advertised
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -552,12 +523,8 @@ def test_provider_config_urls_derive_from_api_root_not_a_literal(monkeypatch):
     assert provider["jobsBaseUrl"] == "/girder/api/v1/volview_processing"
 
 
-# ---------------------------------------------------------------------------
-# Submit-boundary reserved-param deny-list (offline half).
-# The end-to-end 400 lives in test_input_resolution_routes; here the pure screen.
-# ---------------------------------------------------------------------------
-
-
+# Offline half of the submit-boundary reserved-param deny-list; the end-to-end
+# 400 lives in test_input_resolution_routes.
 @pytest.mark.parametrize("reservedKey", ["girderApiUrl", "girderToken"])
 def test_reject_reserved_credential_param(reservedKey):
     with pytest.raises(RestException) as exc:

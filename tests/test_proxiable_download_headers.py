@@ -29,11 +29,7 @@ pytestmark = pytest.mark.skipif(
 PROXIABLE_PATH = "/file/%s/proxiable/%s"
 
 
-# ---------------------------------------------------------------------------
-# Real user / folder / file (shared owner/ownerFolder fixtures live in conftest)
-# ---------------------------------------------------------------------------
-
-
+# Shared owner/ownerFolder fixtures live in conftest.
 def _upload(user, folder, name, content=b"pixel-bytes"):
     from girder.models.upload import Upload
 
@@ -56,11 +52,6 @@ def _download(server, file, user, name="scan.nrrd", headers=None):
         additionalHeaders=headers,
         exception=True,
     )
-
-
-# ---------------------------------------------------------------------------
-# The proxied path always forces a safe download
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

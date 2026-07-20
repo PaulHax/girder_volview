@@ -18,15 +18,11 @@ from girder_jobs.models import job as girder_job
 from ..handles import parseFileHandle
 from ..utils import TRANSIENT_STAGED_META_KEY, isTransientStagedItem
 
-# ---------------------------------------------------------------------------
-# Input URIs → file ids (the backend reading its own mint)
-#
 # Every submitted uri is a backend-minted, origin-relative
 # ``/<apiRoot>/file/<id>/proxiable/<name>`` (``utils.makeFileDownloadUrl``).
 # Resolution recovers the file id from that exact shape and nothing else, then
 # re-checks READ access under the submitting user. Type-agnostic: every input
 # resolves through this one path — the backend never branches on ``type``.
-# ---------------------------------------------------------------------------
 
 
 def _fileIdFromMintedUri(uri):
@@ -171,9 +167,6 @@ def validateStagedReferenceImage(referenceImage, user):
             )
 
 
-# ---------------------------------------------------------------------------
-# Transient staging lifecycle
-#
 # ``stageInput`` (in ``routes.py``) lands client-held bytes in a fresh item
 # tagged transient and mints a proxiable download URI for them; from there a
 # staged input resolves through the same own-scheme path as any other input.
@@ -181,7 +174,6 @@ def validateStagedReferenceImage(referenceImage, user):
 # no job references a shared staged original. Cleanup is therefore split: the
 # job deletes its own copies at terminal state, and the TTL sweep below ages
 # out the originals, which have no job to clean them up.
-# ---------------------------------------------------------------------------
 
 # Age after which an uploaded-but-never-submitted transient item is swept on the
 # next staging call. Upload->submit is normally seconds; a day absorbs an

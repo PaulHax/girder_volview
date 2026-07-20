@@ -29,11 +29,6 @@ FOLDER_MANIFEST_PATH = "/folder/%s/volview"
 ITEM_MANIFEST_PATH = "/item/%s/volview"
 
 
-# ---------------------------------------------------------------------------
-# Users / folders (shared owner/stranger fixtures live in conftest)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def folderA(fsAssetstore, owner):
     from girder.models.folder import Folder
@@ -50,11 +45,6 @@ def folderB(fsAssetstore, owner):
     return Folder().createFolder(
         owner, "studyB", parentType="user", creator=owner, public=False
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _makeStampedJob(owner, folder, taskId="OtsuSegmentation", status=None):
@@ -108,11 +98,6 @@ def _get(server, path, user, params=None):
 def _handle_validator():
     schema = contract_loader.load_generated_schema("job-history-summary")
     return jsonschema.Draft202012Validator(schema)
-
-
-# ---------------------------------------------------------------------------
-# listJobHistory — context-scoped, observability-bounded, JobHistorySummary shape
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -488,11 +473,6 @@ def test_list_recent_jobs_scoped_to_requesting_user_and_folder_acl(
     assert resp.output_status.startswith(b"403")
 
 
-# ---------------------------------------------------------------------------
-# Launch manifest — no session watermark
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_manifests_carry_no_session_watermark(server, owner, folderA):
     # Even a launch that selects a session zip emits a plain `{resources}`
@@ -509,11 +489,6 @@ def test_manifests_carry_no_session_watermark(server, owner, folderA):
     respItem = _get(server, ITEM_MANIFEST_PATH % sessionItem["_id"], owner)
     assert respItem.output_status.startswith(b"200")
     assert "sessionSavedAt" not in respItem.json
-
-
-# ---------------------------------------------------------------------------
-# Job-output files excluded from the launch manifest, yet still durable
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

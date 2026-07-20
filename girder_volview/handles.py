@@ -3,8 +3,9 @@
 The client-visible handle is ``/<apiRoot>/file/<id>/proxiable/<name>``. Mint
 and parse live together here because the name segment must be escaped
 identically on both sides: it is percent-encoded at mint
-(``urllib.parse.quote(name, safe="")`` -- byte-identical to JS
-``encodeURIComponent``) and unescaped at parse, so
+(``urllib.parse.quote(name, safe="")``, which escapes a strict superset of
+what JS ``encodeURIComponent`` does -- it also escapes ``!*'()``) and
+unescaped at parse, so
 ``parseFileHandle(mintFileHandle(fileId, name)) == (fileId, name)`` for every
 legal name and the emitted handle carries no raw fragment/query delimiter.
 Clients never decode: a handle is opaque, round-tripped byte-for-byte; only

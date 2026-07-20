@@ -37,7 +37,6 @@ echo "clean-compat: root-owned files present; reclaiming via a container..." >&2
 IMG=$(docker inspect -f '{{.Config.Image}}' "${DSA_COMPOSE_PROJECT:-dsa-plus}-girder-1" 2>/dev/null || true)
 [ -n "$IMG" ] || IMG=alpine:3
 
-# Mount the PARENT so the deletion target is never the mount point itself.
 if docker run --rm -v "$SCRATCH":/scratch "$IMG" chown -R "$(id -u):$(id -g)" /scratch >/dev/null 2>&1; then
     rm -rf "$SCRATCH"
     echo "clean-compat: removed $SCRATCH"

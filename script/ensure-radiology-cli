@@ -3,12 +3,12 @@
 # registered with slicer_cli_web, so a reprovision (or any plain stack-up)
 # never silently drops a task declared by the image manifest.
 #
-# Why this exists (decisions.md D11): provision.*.yaml only *pulls* listed
-# images and nothing hosts volview-radiology-cli:latest in a registry, so a
-# full stack rebuild empties the radiology tasks until the PUT below is re-run
-# by hand. "The tasks disappeared" reads as a bug. This is the interim
-# durability mechanism: re-register on stack-up. The slicer_cli_web PUT is
-# idempotent, so this script is safe to run repeatedly.
+# Why this exists: provision.*.yaml only *pulls* listed images and nothing hosts
+# volview-radiology-cli:latest in a registry, so a full stack rebuild empties the
+# radiology tasks until the PUT below is re-run by hand. "The tasks disappeared"
+# reads as a bug. This is the interim durability mechanism: re-register on
+# stack-up. The slicer_cli_web PUT is idempotent, so this script is safe to run
+# repeatedly.
 #
 # Usage:
 #   script/ensure-radiology-cli
@@ -61,9 +61,6 @@ PY
 )
 mapfile -t REQUIRED_TASKS <<< "$REQUIRED_TASK_TEXT"
 
-# --------------------------------------------------------------------------
-# 1. Build the image if missing
-# --------------------------------------------------------------------------
 if docker image inspect "$CLI_IMAGE" >/dev/null 2>&1; then
     echo "==> [1/4] image $CLI_IMAGE present"
 else
@@ -75,9 +72,6 @@ else
     (cd "$CLI_REPO" && docker build -t "$CLI_IMAGE" .)
 fi
 
-# --------------------------------------------------------------------------
-# 2. Wait for Girder (bounded)
-# --------------------------------------------------------------------------
 echo "==> [2/4] waiting for Girder at $GIRDER_URL"
 girder_up=
 for _ in $(seq 1 150); do
@@ -92,9 +86,6 @@ if [ -z "$girder_up" ]; then
     exit 1
 fi
 
-# --------------------------------------------------------------------------
-# 3. Register the image with slicer_cli_web (idempotent PUT, no pull)
-# --------------------------------------------------------------------------
 echo "==> [3/4] registering $CLI_IMAGE with slicer_cli_web"
 # Keep both secrets off the command line (argv is visible via `ps`/`/proc` to
 # any local user). We base64-encode the credentials ourselves and hand curl a
@@ -167,10 +158,6 @@ if ! curl -sf -X PUT -H @"$TOKEN_HEADER" -H "Content-Length: 0" \
     exit 1
 fi
 
-# --------------------------------------------------------------------------
-# 4. Verify every manifest task is listed (registration is async, so
-#    poll the facade task list until they appear or we time out — loud).
-# --------------------------------------------------------------------------
 echo "==> [4/4] verifying radiology tasks are registered"
 # Exit codes: 0 = all required tasks present; 2 = task list reachable but a task
 # is still missing (keep polling — registration is async); 3 = the endpoint did

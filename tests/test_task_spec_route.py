@@ -23,10 +23,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ---------------------------------------------------------------------------
-# Fakes -- a radiology CLI carrying the real MedianFilter XML + a pathology CLI.
-# ---------------------------------------------------------------------------
-
 _MEDIAN_XML = (
     Path(__file__).resolve().parent / "slicer_xml" / "median-filter.xml"
 ).read_text()
@@ -98,13 +94,7 @@ def test_radiology_task_spec_returns_200_translated_spec(
     assert body["id"] == "MedianFilter"
     assert body["title"] == "Median Filter"
     assert body["specVersion"] == 1
-    # The wire body is exactly what the translator emits for this XML.
     assert body == slicer_spec.translate_slicer_xml(_MEDIAN_XML, "MedianFilter")
-
-
-# ---------------------------------------------------------------------------
-# Scope guard: a pathology / unknown id must 404 (the server is the boundary).
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

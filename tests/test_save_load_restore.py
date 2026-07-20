@@ -29,12 +29,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures + helpers (shared owner fixture + upload/manifest helpers live in
-# conftest)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def folder(ownerFolder):
     return ownerFolder
@@ -96,11 +90,6 @@ def test_save_without_content_length_is_the_clean_rejection_not_500(monkeypatch)
         monkeypatch.setattr(cherrypy.request, "headers", headers, raising=False)
         with pytest.raises(GirderException):
             launch._uploadWholeSession(None, "id", None, "err.identifier")
-
-
-# ---------------------------------------------------------------------------
-# 1. Specific picks resume matching sessions and ignore unrelated sessions
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -459,11 +448,6 @@ def test_explicit_selection_wins_over_filters(server, owner, folder):
     assert "keep.nrrd" not in names
 
 
-# ---------------------------------------------------------------------------
-# 2. Bare folder-open resumes the newest session, else raw images
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_bare_folder_resumes_newest_session(server, owner, folder):
     _uploadFile(folder, owner, "brain.nrrd")
@@ -491,12 +475,6 @@ def test_bare_folder_without_session_opens_raw_images(server, owner, folder):
     )
 
 
-# ---------------------------------------------------------------------------
-# 3. A filter-gesture save is excluded from the bare open; a plain save is
-#    resumed. Exercises the write-side stamp <-> read-side exclusion.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_filter_save_excluded_from_bare_open_plain_save_resumed(server, owner, folder):
     # Plain save first, then a NEWER filter-gesture save (stamps
@@ -510,11 +488,6 @@ def test_filter_save_excluded_from_bare_open_plain_save_resumed(server, owner, f
     resp = _folderManifest(server, folder, owner, exception=True)
     session_names = [n for n in _resourceNames(resp) if n.endswith(".volview.zip")]
     assert session_names == ["session.volview.zip"]
-
-
-# ---------------------------------------------------------------------------
-# 4. Save returns a resumeUrl; the item save stuffs the zip into the item.
-# ---------------------------------------------------------------------------
 
 
 def _itemIdFromResume(resumeUrl):
@@ -572,11 +545,6 @@ def _sessionItemCount(folder):
     return sum(
         1 for it in Folder().childItems(folder) if ".volview.zip" in it["name"]
     )
-
-
-# ---------------------------------------------------------------------------
-# 5. Resume round-trip: the resumeUrl reloads the saved zip, byte-identical.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

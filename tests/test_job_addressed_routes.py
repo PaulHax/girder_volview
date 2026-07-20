@@ -29,16 +29,6 @@ RESULTS_PATH = "/volview_processing/jobs/%s/results"
 CANCEL_PATH = "/volview_processing/jobs/%s/cancel"
 
 
-# ---------------------------------------------------------------------------
-# Users -- shared owner/stranger fixtures live in conftest
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Job helpers -- real girder_jobs models, driven through their state machine
-# ---------------------------------------------------------------------------
-
-
 def _makeJob(user, public=False, status=None):
     from girder_jobs.constants import JobStatus
     from girder_jobs.models.job import Job
@@ -71,11 +61,6 @@ def _cancel(server, jobId, user):
         isJson=True,
         exception=True,
     )
-
-
-# ---------------------------------------------------------------------------
-# 1. Folder-free addressing -- status + results reachable by job id alone
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -125,11 +110,6 @@ def test_results_route_is_job_addressed_no_folder(server, owner):
     assert resp.headers["Retry-After"] == "2"
 
 
-# ---------------------------------------------------------------------------
-# 2. Cancel projects to the neutral `cancelled`
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_cancel_projects_to_cancelled(server, owner):
     from girder_jobs.constants import JobStatus
@@ -143,11 +123,6 @@ def test_cancel_projects_to_cancelled(server, owner):
     assert resp.json["state"] == "cancelled"
     # And the job is really CANCELED in Mongo -- not just a cosmetic response.
     assert _reload(job["_id"])["status"] == JobStatus.CANCELED
-
-
-# ---------------------------------------------------------------------------
-# 3. Best-effort -- an already-terminal job is a no-op, never fabricated
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -164,11 +139,6 @@ def test_cancel_of_succeeded_job_is_best_effort_not_fabricated(server, owner):
     assert resp.json["state"] == "success"
     assert resp.json["resultState"] == "ready"
     assert _reload(job["_id"])["status"] == JobStatus.SUCCESS
-
-
-# ---------------------------------------------------------------------------
-# 4. Fail closed on the job's own ACL
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

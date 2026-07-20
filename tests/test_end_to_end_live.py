@@ -24,10 +24,6 @@ import uuid
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Reachability self-skip
-# ---------------------------------------------------------------------------
-
 GIRDER_URL = os.environ.get("GIRDER_URL", "http://localhost:8080")
 API_ROOT = GIRDER_URL.rstrip("/") + "/api/v1"
 ADMIN_USER = os.environ.get("DSA_ADMIN_USER", "admin")
@@ -59,11 +55,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ---------------------------------------------------------------------------
-# Synthetic input volume -- three intensity tiers so multi-Otsu yields >1 label
-# ---------------------------------------------------------------------------
-
-
+# Three intensity tiers so multi-Otsu yields >1 label
 def _structured_volume(nx, ny, nz):
     import numpy as np
 
@@ -155,11 +147,6 @@ def _write_dicom_series(dest_dir, slices=12, rows=48, cols=48):
         pydicom.dcmwrite(path, ds, enforce_file_format=True)
         paths.append(path)
     return paths
-
-
-# ---------------------------------------------------------------------------
-# Girder / backend REST helpers
-# ---------------------------------------------------------------------------
 
 
 def _proxiable_uri(file_doc):
@@ -264,11 +251,6 @@ def _assert_labelmap_result(gc, job_id, final, tmp_path):
     return seg
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def gc():
     girder_client = pytest.importorskip("girder_client")
@@ -294,11 +276,6 @@ def e2e_folder(gc):
         pass
 
 
-# ---------------------------------------------------------------------------
-# 1. Single-volume segmentation -- output->job correlation
-# ---------------------------------------------------------------------------
-
-
 def test_single_volume_result_correlates_to_job(gc, e2e_folder, tmp_path):
     nrrd = _write_nrrd(str(tmp_path / "phantom.nrrd"))
     _, files = _upload_item(gc, e2e_folder["_id"], "single-volume", [nrrd])
@@ -319,15 +296,10 @@ def test_single_volume_result_correlates_to_job(gc, e2e_folder, tmp_path):
     _assert_labelmap_result(gc, job_id, final, tmp_path)
 
 
-# ---------------------------------------------------------------------------
-# 1b. Crash path -- a CLI that raises must reach ERROR, not a silent success
-# ---------------------------------------------------------------------------
-
-
 def test_crashed_cli_reports_error_not_silent_success(gc, e2e_folder, tmp_path):
     """A CLI that raises (ThresholdSegmentation with lower > upper) must drive the
     job to ERROR with a non-empty log tail, and /results must return the explicit
-    non-success 400 -- never a silent success with empty results.
+    non-success 409 -- never a silent success with empty results.
 
     ``cli_list`` propagates the child's exit code, so girder_worker sees a
     non-zero exit and marks the job failed.
@@ -366,11 +338,6 @@ def test_crashed_cli_reports_error_not_silent_success(gc, e2e_folder, tmp_path):
     with pytest.raises(girder_client.HttpError) as exc:
         gc.get("volview_processing/jobs/%s/results" % job_id)
     assert exc.value.status == 409
-
-
-# ---------------------------------------------------------------------------
-# 2. Multi-file DICOM series -> assembled volume -> labelmap
-# ---------------------------------------------------------------------------
 
 
 def test_multifile_dicom_series_result_correlates_to_job(gc, e2e_folder, tmp_path):

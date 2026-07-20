@@ -11,10 +11,6 @@ import math
 import re
 import xml.etree.ElementTree as ET
 
-# ---------------------------------------------------------------------------
-# XML helpers -- direct-child element access.
-# ---------------------------------------------------------------------------
-
 
 def _first_child(el, tag):
     return next((c for c in el if c.tag == tag), None)
@@ -31,9 +27,7 @@ def _child_text(el, tag):
     return child.text
 
 
-# ---------------------------------------------------------------------------
 # Mapping tables. DO NOT redesign these: the fixtures pin them byte for byte.
-# ---------------------------------------------------------------------------
 
 # Slicer element tag -> widget type. An unmapped tag yields ``None`` (the caller
 # treats it as an unknown field kind, fail closed).
@@ -127,14 +121,6 @@ def _parse_default(widget_type, default_el):
     return _convert(widget_type, text)
 
 
-# ---------------------------------------------------------------------------
-# Parse -- <executable> -> ordered parsed params. Each panel's direct-child
-# <label> opens a section; the params that follow it (up to the next <label>,
-# <description> excluded) belong to it. Output shaping is left to the translate
-# layer below.
-# ---------------------------------------------------------------------------
-
-
 def _parse_param(param_el, section):
     tag = param_el.tag
     widget = _widget_type(tag)
@@ -223,13 +209,6 @@ def _parse_executable(xml_text):
     }
 
 
-# ---------------------------------------------------------------------------
-# Backend surface -- ``parse_cli`` yields the category, the output descriptors,
-# and the parsed params from ONE ElementTree parse. Callers thread the parsed
-# structures into their helpers rather than re-parsing per guard.
-# ---------------------------------------------------------------------------
-
-
 def parse_cli(xml_text):
     """Parse a Slicer CLI XML once into ``{category, outputs, params}``.
 
@@ -238,9 +217,7 @@ def parse_cli(xml_text):
     list -- every identified ``<image>``/``<file>`` output-channel param -- that
     reference-bound collection records and autofill read (``isLabel`` =
     ``type == "label"``; ``fileExtensions`` lowercased); ``params`` is the raw
-    parsed-param list. Outputs project from the SAME ``_params_from_root`` walk
-    as ``params`` and ``declared_params``, so no surface can see a param another
-    one misses.
+    parsed-param list.
 
     Tolerant: an unparseable document yields
     ``{category: None, outputs: [], params: []}`` (a malformed CLI is out of
@@ -311,12 +288,6 @@ def declared_params(xml_text):
             }
     return params
 
-
-# ---------------------------------------------------------------------------
-# Translate -- parsed params -> VolView task spec. This is where the imaging
-# field kinds (sourceRef / bounds) and the int/float split are produced; the
-# mapping tables above deliberately do not know the spec vocabulary.
-# ---------------------------------------------------------------------------
 
 _SPEC_VERSION = 1
 

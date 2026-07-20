@@ -39,11 +39,6 @@ def _intent_validator():
     return jsonschema.Draft202012Validator(schema)
 
 
-# ---------------------------------------------------------------------------
-# The intent builder emits add-segment-group with a source provenance tag.
-# ---------------------------------------------------------------------------
-
-
 def test_labelmap_image_maps_to_add_segment_group():
     intent = _intentForOutput(_out("image", True), _URL, _NAME, _JOB_ID)
     assert intent["intent"] == "add-segment-group"
@@ -65,13 +60,6 @@ def test_non_image_file_has_no_state_intent():
     intent = _intentForOutput(_out("file", False), _URL, _NAME, _JOB_ID)
     assert intent == {"url": _URL, "name": _NAME}
     assert "intent" not in intent
-
-
-# ---------------------------------------------------------------------------
-# add-segment-group carries source:{jobId, outputId} and sets NO `segments`
-# payload — a `.seg.nrrd` labelmap carries its names/colors as embedded metadata
-# the client reads on load.
-# ---------------------------------------------------------------------------
 
 
 def test_segment_group_carries_source_tag():
@@ -107,10 +95,6 @@ def test_base_image_and_ordinary_file_carry_no_source_or_segments():
         assert "segments" not in intent
 
 
-# ---------------------------------------------------------------------------
-# The emitted intents validate against the generated JSON Schema.
-# ---------------------------------------------------------------------------
-
 # The backend emits the embedded (no-`segments`) labelmap shape; the optional
 # `segments` shape stays contract-valid and is covered by the fixture-schema
 # check below. `_intentForOutput` emits the INTENT only; `_collectJobResults`
@@ -138,13 +122,6 @@ def test_emitted_intent_validates_against_schema(stem):
     validator = _intent_validator()
     validator.validate(_EMITTED_CASES[stem])  # raises on invalid
 
-
-# ---------------------------------------------------------------------------
-# The shared golden fixtures validate against the same schema, exactly as the
-# client's zod suite parses them — the single-source parity check. The unknown
-# fixture (add-polygon) validates via the schema's fail-OPEN branch so the
-# client applier preserves the row without applying a state action.
-# ---------------------------------------------------------------------------
 
 _INTENT_FIXTURES = sorted(
     stem

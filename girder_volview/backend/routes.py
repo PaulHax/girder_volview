@@ -41,11 +41,6 @@ from .slicer_spec import translate_slicer_xml, declared_params
 from . import inputs, submit, outputs, results
 
 
-# ---------------------------------------------------------------------------
-# Launch-context routes (folder-addressed)
-# ---------------------------------------------------------------------------
-
-
 @access.public(cookie=True, scope=TokenScope.DATA_READ)
 @boundHandler
 @autoDescribeRoute(
@@ -581,13 +576,11 @@ def runTask(self, folder, taskId, body):
     return {"jobId": str(job_doc["_id"])}
 
 
-# ---------------------------------------------------------------------------
-# Job-addressed routes — keyed by job id alone and gated by the job's OWN ACL.
+# Job-addressed routes are keyed by job id alone and gated by the job's OWN ACL.
 # The launch folder is not part of a job's identity, so these carry no
 # ``folderId``; they live on the folder-free ``volview_processing`` resource
 # below. getJob / getJobResults are READ-gated; cancel and delete are WRITE-gated
 # so a read-only viewer who can see a job's status cannot cancel or delete it.
-# ---------------------------------------------------------------------------
 
 
 def _loadJobForStatusProjection(jobId, user):
@@ -782,11 +775,6 @@ def stageInput(self, folder, file, descriptor):
         raise
     # The backend mints the staged URI; the client constructs none.
     return {"uris": [makeFileDownloadUrl(fileDoc)]}
-
-
-# ---------------------------------------------------------------------------
-# Route registration
-# ---------------------------------------------------------------------------
 
 
 class _JobResource(Resource):

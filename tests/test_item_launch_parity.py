@@ -52,11 +52,6 @@ STAGE_PATH = "/folder/%s/volview_processing/stage"
 RUN_PATH = "/folder/%s/volview_processing/tasks/sometask/run"
 
 
-# ---------------------------------------------------------------------------
-# Users / a parent folder + a single item launched from inside it
-# ---------------------------------------------------------------------------
-
-
 # The shared ``owner``/``stranger`` fixtures live in conftest.
 
 
@@ -122,11 +117,6 @@ def runStub(monkeypatch):
     return captured
 
 
-# ---------------------------------------------------------------------------
-# Request helpers
-# ---------------------------------------------------------------------------
-
-
 def _get(server, path, user):
     return server.request(
         path=path,
@@ -154,11 +144,6 @@ def _served_launch_folder_id(server, item, user):
     return _segment_after(provider["baseUrl"], "folder")
 
 
-# ---------------------------------------------------------------------------
-# 1. Derivation — the served processing provider is scoped to the parent folder
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.plugin("volview")
 def test_item_launch_derives_processing_context_from_parent_folder(
     server, owner, parentFolder, launchItem
@@ -176,11 +161,6 @@ def test_item_launch_derives_processing_context_from_parent_folder(
     assert provider["baseUrl"] == (
         "/api/v1/folder/%s/volview_processing" % parentFolder["_id"]
     )
-
-
-# ---------------------------------------------------------------------------
-# 2. listTasks — reachable at the derived parent folder; ACL still gates
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -220,11 +200,6 @@ def test_list_tasks_under_item_launch_still_enforces_folder_acl(
         exception=True,
     )
     assert resp.output_status.startswith(b"403")
-
-
-# ---------------------------------------------------------------------------
-# 3. runTask — launch stamp + default output folder are the parent folder
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")
@@ -276,11 +251,6 @@ def test_run_task_under_item_launch_stamps_and_outputs_to_parent_folder(
     assert job["volviewSubmittedParameters"] == {
         "outputVolume": {"name": serverName}
     }
-
-
-# ---------------------------------------------------------------------------
-# 4. stageInput — the transient input lands in the parent folder
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.plugin("volview")

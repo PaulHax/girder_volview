@@ -27,11 +27,6 @@ from .slicer_spec import (
 _OUTPUT_FOLDER_SUFFIX = "_folder"
 
 
-# ---------------------------------------------------------------------------
-# slicer_cli_web bridge
-# ---------------------------------------------------------------------------
-
-
 def _slicerCliAvailable():
     try:
         import slicer_cli_web  # noqa: F401
@@ -64,10 +59,6 @@ def _cliItemToSummary(cliItem):
         "dockerImage": cliItem.image,
     }
 
-
-# ---------------------------------------------------------------------------
-# Task scoping — filter the CLI catalog by <category>
-# ---------------------------------------------------------------------------
 
 # Default category set (matched case-insensitively). Segmentation / Filtering
 # cover radiology operations a future CLI might categorize under and are
@@ -122,8 +113,8 @@ def _taskInScope(cliItem, allowed=None):
 
     A CLI with no/unknown ``<category>`` is excluded so scoping can't be
     bypassed; a parse failure is likewise out of scope. ``allowed`` (lowercased
-    set) is passed in by ``_scopedCliItems`` to parse the env once per request;
-    the single-task callers omit it.
+    set) is passed in by ``_scopedCliItems`` so the env is parsed once per
+    request; omitting it re-reads the env per call.
     """
     try:
         category = _cliCategory(cliItem.xml)
@@ -162,15 +153,11 @@ def _findScopedCliItem(taskId, user):
     return cliItem, parsed
 
 
-# ---------------------------------------------------------------------------
-# Output naming — SERVER-OWNED
-#
 # The composed name becomes the output filename the worker writes on the
 # container host, so it must be a server-generated basename: every component is
 # collapsed through ``_safeNameToken`` and a client-supplied name is discarded.
 # Correlation itself binds by reference (``outputs.py`` / ``results.py``), never
 # by this string.
-# ---------------------------------------------------------------------------
 
 # Compound extensions we want to preserve as a single suffix.
 _COMPOUND_EXTENSIONS = (
@@ -326,13 +313,9 @@ def _autofillOutputs(values, outputs, cli_name):
     return values
 
 
-# ---------------------------------------------------------------------------
-# Values → slicer_cli_web params
-#
 # Inputs cross to the CLI as Girder file ids, never URLs: ``slicer_cli_web``
 # injects ``girderApiUrl``/``girderToken`` and the CLI fetches + assembles the
 # bytes itself, so the backend never touches pixels.
-# ---------------------------------------------------------------------------
 
 
 def _rejectReservedSubmitParams(values):
@@ -400,9 +383,6 @@ def _rejectUndeclaredSubmitParams(values, declared):
         )
 
 
-# ---------------------------------------------------------------------------
-# Declared-value validation — fail fast at the submit boundary
-#
 # The key guards above establish WHICH names may be submitted; these validate
 # the VALUES against ``slicer_spec.declared_params``. They branch by
 # DECLARATION, unlike ``_translateValuesToSlicerParams`` which branches by value
@@ -415,7 +395,6 @@ def _rejectUndeclaredSubmitParams(values, declared):
 # vector ELEMENTS (no shipped radiology CLI declares them); and uri strings
 # inside input objects (``resolveInputUrisToFiles`` owns scheme validation and
 # the ACL re-check).
-# ---------------------------------------------------------------------------
 
 
 def _isNumber(value):

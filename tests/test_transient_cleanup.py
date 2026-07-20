@@ -22,11 +22,6 @@ from girder_volview.backend import inputs
 from girder_volview.utils import TRANSIENT_STAGED_META_KEY
 
 
-# ---------------------------------------------------------------------------
-# Fakes (no live Girder)
-# ---------------------------------------------------------------------------
-
-
 class _RecordingItemModel:
     """Minimal Item() stand-in: load by id, find returns a canned list, remove
     records. ``capture`` (a list) receives the query passed to ``find`` so a test
@@ -92,11 +87,6 @@ def _jobEvent(job):
     # The common cross-process case: the event carries only the id, not the
     # committed marker -- the handler must reload the job to see it.
     return _Event({"job": {"_id": job["_id"]}})
-
-
-# ---------------------------------------------------------------------------
-# Terminal cleanup handler
-# ---------------------------------------------------------------------------
 
 
 def test_cleanup_removes_transients_on_every_terminal_job_state(monkeypatch):
@@ -173,14 +163,8 @@ def test_cleanup_ignores_malformed_event(monkeypatch):
     assert model.removed == []
 
 
-# ---------------------------------------------------------------------------
-# Orphan sweep — query construction + removal wiring (age discrimination is a
-# real-Mongo concern, covered in test_staging_routes). Age alone decides: no
-# job ever depends on a staged original (submission copies its inputs), so the
-# sweep carries no live-job claim logic.
-# ---------------------------------------------------------------------------
-
-
+# Age alone decides: no job ever depends on a staged original (submission copies
+# its inputs), so the sweep carries no live-job claim logic.
 def test_sweep_builds_ttl_query_and_removes(monkeypatch):
     now = datetime.datetime(2026, 7, 4, 12, 0, 0)
     o1, o2 = ObjectId(), ObjectId()
@@ -198,11 +182,6 @@ def test_sweep_builds_ttl_query_and_removes(monkeypatch):
     assert query["folderId"] == folder["_id"]
     assert query["meta.volviewTransient"] is True
     assert query["created"] == {"$lt": now - inputs._TRANSIENT_ORPHAN_TTL}
-
-
-# ---------------------------------------------------------------------------
-# Per-job input copies — the ownership move that lets the sweep stay dumb
-# ---------------------------------------------------------------------------
 
 
 class _CopyingItemModel(_RecordingItemModel):
@@ -374,11 +353,6 @@ def test_shared_staged_input_copied_once_per_job_submission(monkeypatch):
     assert len(copied) == 1
     assert newParams["a"] == newParams["b"]
     assert newParams["a"] != str(stagedFile["_id"])
-
-
-# ---------------------------------------------------------------------------
-# Transient-marker helpers
-# ---------------------------------------------------------------------------
 
 
 def test_is_transient_item():

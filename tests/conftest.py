@@ -55,11 +55,6 @@ def mongo_reachable(timeout=0.5):
         return False
 
 
-# ---------------------------------------------------------------------------
-# Users / launch folder
-# ---------------------------------------------------------------------------
-
-
 def makeUser(login, admin=False):
     """Create a user whose login is uniquified from ``login``.
 
@@ -100,11 +95,6 @@ def ownerFolder(fsAssetstore, owner):
     )
 
 
-# ---------------------------------------------------------------------------
-# Deterministic api root
-# ---------------------------------------------------------------------------
-
-
 API_ROOT = "api/v1"
 
 
@@ -116,12 +106,6 @@ def _fixed_api_root(monkeypatch):
     from girder_volview import handles
 
     monkeypatch.setattr(handles, "getApiRoot", lambda: API_ROOT)
-
-
-# ---------------------------------------------------------------------------
-# Job helpers -- a job that OWNS a real private output folder, driven through
-# the real girder_jobs state machine
-# ---------------------------------------------------------------------------
 
 
 def _reload(job):
@@ -218,11 +202,6 @@ def _itemExists(itemId):
     return Item().load(itemId, force=True, exc=False) is not None
 
 
-# ---------------------------------------------------------------------------
-# Upload / manifest helpers
-# ---------------------------------------------------------------------------
-
-
 def _uploadFile(folder, user, name, data=b"pixels", meta=None):
     """Upload one file into ``folder``; return (item, file)."""
     from girder.models.item import Item
@@ -261,11 +240,6 @@ def _itemManifest(server, item, user, **kwargs):
         isJson=True,
         **kwargs,
     )
-
-
-# ---------------------------------------------------------------------------
-# Fakes (no live Girder)
-# ---------------------------------------------------------------------------
 
 
 class _Event:

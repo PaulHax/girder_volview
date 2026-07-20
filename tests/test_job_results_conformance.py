@@ -2,7 +2,7 @@
 
 The backend's ``getJobResults`` route returns the neutral result-read envelope
 (the status/results contract): a succeeded job yields
-``{"intents": [...], "missing": N}``
+``{"resultState": ..., "intents": [...], "missing": N}``
 (``jobResultsSchema``), and a non-success / total-loss read is a separate error
 shape (``jobResultsErrorSchema``). Both the shared golden fixtures and a
 backend-shaped payload are validated against the generated JSON Schemas the
@@ -29,13 +29,7 @@ def _validator(schema_name):
     return jsonschema.Draft202012Validator(schema)
 
 
-# ---------------------------------------------------------------------------
-# job-results.schema.json — the success envelope
-# ---------------------------------------------------------------------------
-
-
 def test_missing_fixture_validates_against_job_results_schema():
-    # The golden fixture pins a pure-intent envelope with an explicit missing count.
     fixture = contract_loader.load_fixture("wire/job-results.missing.json")
     _validator("job-results").validate(fixture)
     assert fixture["missing"] == 2
@@ -94,11 +88,6 @@ def test_envelope_negative_missing_is_rejected():
     validator = _validator("job-results")
     with pytest.raises(Exception):
         validator.validate({"resultState": "incomplete", "intents": [], "missing": -1})
-
-
-# ---------------------------------------------------------------------------
-# job-results-error.schema.json — the non-success / total-loss error shape
-# ---------------------------------------------------------------------------
 
 
 def test_error_fixture_validates_against_job_results_error_schema():
