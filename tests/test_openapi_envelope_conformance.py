@@ -117,11 +117,18 @@ def test_run_task_request_with_input_and_scalars_validates():
     _envelope_validator("RunTaskRequest").validate(body)
 
 
-@pytest.mark.parametrize("body", [{}, {"values": {}}])
-def test_run_task_request_accepts_empty_submission(body):
-    # `values` is optional and an empty map is valid, so a no-param submission
-    # stays compatible (additive rule).
-    _envelope_validator("RunTaskRequest").validate(body)
+def test_run_task_request_accepts_empty_values_map():
+    # A no-parameter task still sends the key, so an empty map must validate.
+    _envelope_validator("RunTaskRequest").validate({"values": {}})
+
+
+def test_run_task_request_requires_values():
+    # `values` is contractually REQUIRED — the client always sends the key, even
+    # for a no-parameter task. The reference backend's tolerance of an absent
+    # body (`routes.py` `(body or {})`) is implementation leniency, NOT part of
+    # the neutral surface: a backend author may rely on the key being present.
+    with pytest.raises(jsonschema.ValidationError):
+        _envelope_validator("RunTaskRequest").validate({})
 
 
 def test_run_task_request_rejects_malformed_input_value():
