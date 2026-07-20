@@ -198,23 +198,38 @@ def saveToFolder(self, folderId, metadata):
     # upload would raise only once the zip is stored, 500ing on an orphan item.
     if not isinstance(metadata, dict):
         metadata = {}
-    fileDic = _uploadWholeSession(
-        Folder, folderId, user, "girder.api.v1.folder.volview_save", metadata
-    )
     # Rebase this save's linkedResources onto the newest already-saved session in
     # the selection set: a save from a checked-session open would otherwise stamp
     # linkedResources={items:[S]} instead of S's own lineage. Load-bearing for
     # filter sessions — a save from a checked FILTER-session open must inherit
     # the filter link so the filter row resumes this newest save and the bare
     # folder-open keeps excluding it.
-    linkedResources = normalizeLinkedResources((metadata or {}).get("linkedResources"))
+    #
+    # Resolved BEFORE the upload: a malformed linkedResources (truthy non-object)
+    # or an unloadable id must 4xx with nothing stored, not raise once the zip has
+    # already finalized into a session item that a folder-open would then pick as
+    # the newest session to restore.
+    rawLinked = metadata.get("linkedResources")
+    linkedResources = normalizeLinkedResources(
+        rawLinked if isinstance(rawLinked, dict) else None
+    )
     selectedItems = loadModels(user, Item, linkedResources["items"])
     newestSelectedSession = findNewestSession(selectedItems)
+    savedMetadata = metadata
     if newestSelectedSession:
-        metadata = {"linkedResources": getLinkedResources(newestSelectedSession)}
+        savedMetadata = {"linkedResources": getLinkedResources(newestSelectedSession)}
 
+    fileDic = _uploadWholeSession(
+        Folder, folderId, user, "girder.api.v1.folder.volview_save", metadata
+    )
     item = Item().load(fileDic["itemId"], user=user, level=AccessType.WRITE, exc=True)
-    Item().setMetadata(item, metadata)
+    try:
+        Item().setMetadata(item, savedMetadata)
+    except Exception:
+        # An unstamped session item is still the folder's newest session, so a
+        # later folder-open would restore this failed save. Drop it instead.
+        Item().remove(item)
+        raise
     return _saveResponse(fileDic["itemId"])
 
 

@@ -359,6 +359,69 @@ def test_save_with_non_dict_metadata_does_not_orphan_an_item(server, owner, fold
 
 
 @pytest.mark.plugin("volview")
+def test_save_with_non_dict_linked_resources_does_not_orphan_an_item(
+    server, owner, folder
+):
+    # Same stance one level down: a truthy non-object `linkedResources` must not
+    # reach `.get` after the zip stored. The rebase is resolved before the upload,
+    # so an unlinkable shape just saves without lineage.
+    from girder.models.folder import Folder as FolderModel
+
+    resp = server.request(
+        path="/folder/%s/volview" % folder["_id"],
+        method="POST",
+        user=owner,
+        body=b"annotated",
+        type="application/zip",
+        isJson=True,
+        exception=True,
+        params={"metadata": json.dumps({"linkedResources": "nonsense"})},
+    )
+
+    assert "resumeUrl" in resp.json
+    sessions = [
+        item
+        for item in FolderModel().childItems(folder)
+        if item["name"].endswith(".volview.zip")
+    ]
+    assert len(sessions) == 1, "exactly the one saved session, no orphan"
+
+
+@pytest.mark.plugin("volview")
+def test_failed_metadata_write_removes_the_session_item(
+    server, owner, folder, monkeypatch
+):
+    # An unstamped session item is still the folder's NEWEST session, so a later
+    # folder-open would restore this failed save. The save must roll it back.
+    from girder.models.folder import Folder as FolderModel
+    from girder.models.item import Item as ItemModel
+
+    def boom(self, item, metadata, **kwargs):
+        raise Exception("metadata write failed")
+
+    monkeypatch.setattr(ItemModel, "setMetadata", boom)
+
+    resp = server.request(
+        path="/folder/%s/volview" % folder["_id"],
+        method="POST",
+        user=owner,
+        body=b"annotated",
+        type="application/zip",
+        isJson=True,
+        exception=True,
+        params={"metadata": json.dumps({"linkedResources": {}})},
+    )
+
+    assert resp.output_status.startswith(b"500")
+    sessions = [
+        item
+        for item in FolderModel().childItems(folder)
+        if item["name"].endswith(".volview.zip")
+    ]
+    assert sessions == [], "the failed save must not linger as a restore target"
+
+
+@pytest.mark.plugin("volview")
 def test_filters_must_be_json_object_or_array(server, owner, folder):
     resp = _folderManifest(
         server, folder, owner, params={"filters": json.dumps("not-a-dict")}
