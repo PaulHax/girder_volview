@@ -1,8 +1,6 @@
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
 import { readJson } from './http';
-import { makeNrrd } from './nrrd';
-import { E2eState } from './state';
 
 // Data provisioning over the girder REST API: authenticate, create a fresh
 // public folder, and upload two synthetic NRRD images, so the gestures have
@@ -45,16 +43,6 @@ export async function createFolderUnder(
   return folder._id;
 }
 
-// Create a fresh, public test folder under the authenticated user.
-async function createFolder(
-  request: APIRequestContext,
-  token: string,
-  userId: string
-): Promise<string> {
-  const runId = `${Date.now()}-${Math.floor(Math.random() * 1e4)}`;
-  return createFolderUnder(request, token, 'user', userId, `girder-volview-e2e-${runId}`);
-}
-
 // Upload one in-memory file to a folder via girder's two-step upload flow
 // (init POST /file -> {_id}; then POST /file/chunk with the bytes as the raw
 // request body). Modern girder REJECTS multipart on /file/chunk and reads the
@@ -92,22 +80,6 @@ export async function uploadFile(
   // eslint-disable-next-line no-console
   console.log(`[e2e] uploaded ${name} -> item ${itemId} (${bytes.length} bytes)`);
   return { itemId, itemName: name };
-}
-
-// Full provision step: returns the state the tests + teardown consume.
-export async function provision(request: APIRequestContext): Promise<E2eState> {
-  const { token, userId } = await authenticate(request);
-
-  const folderId = await createFolder(request, token, userId);
-  const a = await uploadFile(request, token, folderId, 'synthetic-a.nrrd', makeNrrd({ variant: 0 }));
-  const b = await uploadFile(request, token, folderId, 'synthetic-b.nrrd', makeNrrd({ variant: 1 }));
-  return {
-    folderId,
-    itemIds: [a.itemId, b.itemId],
-    itemNames: [a.itemName, b.itemName],
-    token,
-    provisioned: true,
-  };
 }
 
 // Delete a provisioned folder (teardown).

@@ -36,8 +36,6 @@ import { fetchZipSummary } from '../../helpers/session-zip';
 
 const PET_DESC = 'PET NAC OSEM';
 
-test.describe.configure({ mode: 'serial' });
-
 function requireGesture(state: CompatState, id: CapturedGesture['id']): CapturedGesture {
   const gesture = state.gestures.find((g) => g.id === id);
   if (!gesture) throw new Error(`[compat] capture did not record gesture '${id}'`);

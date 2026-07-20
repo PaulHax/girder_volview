@@ -6,12 +6,11 @@ import { CONFIG, apiUrl } from './config';
 import { readJson } from './http';
 import { makeNrrd } from './nrrd';
 import { authenticate, createFolderUnder, uploadFile, deleteFolder } from './provision';
-import { CompatState } from './compat-state';
+import { CompatState, FixtureFolder, FixtureId } from './compat-state';
 
-// Compat provisioning: one run-root folder holding an nrrd/ subfolder (the
-// synthetic images the normal suite also uses) and a dicom/ subfolder (real
-// IDC slices plain-uploaded by `seed.py seed-small`, plus an item-list
-// config that makes the folder filter/group on meta.dicom.*).
+// Provision one run root containing an isolated folder for every scenario.
+// NRRD fixtures are generated in memory; grouped fixtures plain-upload cached
+// IDC DICOM slices and an item-list config that groups on meta.dicom.*.
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SEED_CLI = path.resolve(__dirname, '..', 'seed', 'seed.py');
@@ -66,7 +65,7 @@ export async function findDevkitTrialFolder(
 
 export async function provisionCompat(
   request: APIRequestContext,
-  deployed: { mainGirderSha: string; mainVolviewSha: string }
+  deployed: { sourceGirderSha: string; sourceVolviewSha: string }
 ): Promise<CompatState> {
   const { token, userId } = await authenticate(request);
 
@@ -78,49 +77,73 @@ export async function provisionCompat(
     userId,
     `girder-volview-compat-${runId}`
   );
-  const nrrdFolderId = await createFolderUnder(request, token, 'folder', runRootFolderId, 'nrrd');
-  const singleFolderId = await createFolderUnder(request, token, 'folder', runRootFolderId, 'single');
-  const dicomFolderId = await createFolderUnder(request, token, 'folder', runRootFolderId, 'dicom');
+  const fixtures = {} as Record<FixtureId, FixtureFolder>;
 
-  const a = await uploadFile(request, token, nrrdFolderId, 'synthetic-a.nrrd', makeNrrd({ variant: 0 }));
-  const b = await uploadFile(request, token, nrrdFolderId, 'synthetic-b.nrrd', makeNrrd({ variant: 1 }));
-  const c = await uploadFile(request, token, singleFolderId, 'synthetic-c.nrrd', makeNrrd({ variant: 0 }));
-
-  seedSmallDicom(dicomFolderId);
-  await uploadFile(
-    request,
-    token,
-    dicomFolderId,
-    '.large_image_config.yaml',
-    fs.readFileSync(DICOM_LI_CONFIG)
-  );
-
-  const dicomItems = await listItems(request, token, dicomFolderId);
-  const dicomImages = dicomItems.filter((it) => it.name.endsWith('.dcm'));
-  if (dicomImages.length === 0) {
-    throw new Error('[compat] seed-small uploaded no .dcm items');
+  async function nrrdFixture(id: FixtureId, count: 1 | 2): Promise<void> {
+    const folderId = await createFolderUnder(request, token, 'folder', runRootFolderId, id);
+    const uploaded = [];
+    for (let index = 0; index < count; index += 1) {
+      uploaded.push(
+        await uploadFile(
+          request,
+          token,
+          folderId,
+          `synthetic-${index + 1}.nrrd`,
+          makeNrrd({ variant: index })
+        )
+      );
+    }
+    fixtures[id] = {
+      folderId,
+      itemIds: uploaded.map((item) => item.itemId),
+      itemNames: uploaded.map((item) => item.itemName),
+    };
   }
+
+  async function dicomFixture(id: FixtureId): Promise<void> {
+    const folderId = await createFolderUnder(request, token, 'folder', runRootFolderId, id);
+    seedSmallDicom(folderId);
+    await uploadFile(
+      request,
+      token,
+      folderId,
+      '.large_image_config.yaml',
+      fs.readFileSync(DICOM_LI_CONFIG)
+    );
+    const dicomItems = await listItems(request, token, folderId);
+    const images = dicomItems.filter((item) => item.name.endsWith('.dcm'));
+    if (images.length === 0) throw new Error(`[compat] fixture '${id}' contains no DICOM items`);
+    fixtures[id] = {
+      folderId,
+      itemIds: images.map((item) => item._id),
+      itemNames: images.map((item) => item.name),
+    };
+  }
+
+  await nrrdFixture('single-item', 1);
+  await nrrdFixture('checked-nrrd', 2);
+  await dicomFixture('filtered-dicom');
+  await dicomFixture('study-layered');
+
+  await nrrdFixture('lifecycle-single', 1);
+  await nrrdFixture('lifecycle-checked', 2);
+  await dicomFixture('lifecycle-filter');
+  await nrrdFixture('lifecycle-restart', 2);
+  await nrrdFixture('lifecycle-bare', 2);
+  await nrrdFixture('lifecycle-older', 2);
+  await nrrdFixture('lifecycle-session-row', 2);
+  await nrrdFixture('lifecycle-url-contract', 2);
+  await nrrdFixture('jobs-comeback', 1);
+  await nrrdFixture('jobs-live', 1);
 
   const devkitTrialFolderId = await findDevkitTrialFolder(request, token);
 
   return {
     createdAt: new Date().toISOString(),
-    mainGirderSha: deployed.mainGirderSha,
-    mainVolviewSha: deployed.mainVolviewSha,
+    sourceGirderSha: deployed.sourceGirderSha,
+    sourceVolviewSha: deployed.sourceVolviewSha,
     runRootFolderId,
-    nrrdFolderId,
-    singleFolderId,
-    dicomFolderId,
-    itemIds: {
-      [nrrdFolderId]: [a.itemId, b.itemId],
-      [singleFolderId]: [c.itemId],
-      [dicomFolderId]: dicomImages.map((it) => it._id),
-    },
-    itemNames: {
-      [nrrdFolderId]: [a.itemName, b.itemName],
-      [singleFolderId]: [c.itemName],
-      [dicomFolderId]: dicomImages.map((it) => it.name),
-    },
+    fixtures,
     token,
     provisioned: true,
     dicomSeeded: true,

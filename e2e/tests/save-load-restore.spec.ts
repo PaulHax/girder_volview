@@ -2,21 +2,22 @@ import { test, expect, Page } from '@playwright/test';
 import {
   gotoFolder,
   checkRowByItemId,
+  checkRowByTexts,
+  fillFilterBox,
   uncheckAllRows,
   openInVolView,
   openFromItemPage,
 } from '../helpers/girder-ui';
 import {
-  setup,
-  launchUrl,
+  setupFixture,
   countSessionItems,
   firstFileId,
   fetchManifest,
   resourceUrls,
   CONFIG,
   Girder,
-  Gesture,
 } from '../helpers/girder';
+import { FixtureId } from '../helpers/compat-state';
 import {
   waitForVolViewReady,
   urlsParam,
@@ -26,311 +27,256 @@ import {
 import {
   isSessionManifest,
   resourceNames,
-  gotoCapturingManifest,
   reloadCapturingManifest,
 } from '../helpers/manifest';
 
-// The F5 save/load/restore lifecycle per gesture, against a DEPLOYED
-// girder_volview + VolView stack.
+// Current-to-current lifecycle coverage. Every scenario owns a provisioned
+// folder, and every launch goes through the deployed Girder UI and open.js.
 
-test.describe.configure({ mode: 'serial' });
+const PATIENT2 = 'ACRIN-NSCLC-FDG-PET-022';
 
-// Launch a gesture the way a USER does: drive the girder UI so the plugin's own
-// open.js builds the URL and window.open()s the tab. `driver` is the girder
-// page; the returned `view` is the VolView tab (a popup for UI gestures).
-//
-// `filter` is the exception — it has no UI driver here: the gesture lives on
-// large_image grouped rows, which need a .large_image_config.yaml plus
-// meta._grouping that this suite's two synthetic NRRDs do not carry. It stays
-// on the launchUrl() replica, which the URL-mirror test pins to open.js.
+type Gesture = 'single-item' | 'checked' | 'filter' | 'bare-folder';
 type Launched = { view: Page; freshManifest: string; manifest: any };
 
 async function launchGesture(driver: Page, g: Girder, gesture: Gesture): Promise<Launched> {
-  const predicted = launchUrl(g, gesture).freshManifest;
-  if (gesture === 'filter') {
-    const manifest = await gotoCapturingManifest(driver, launchUrl(g, gesture).url);
-    return { view: driver, freshManifest: predicted, manifest };
-  }
+  let launch;
   if (gesture === 'single-item') {
-    const launch = await openFromItemPage(driver, g.itemId);
-    await waitForVolViewReady(launch.popup);
-    return { view: launch.popup, freshManifest: predicted, manifest: await launch.manifest };
-  }
-  await gotoFolder(driver, g.folderId);
-  // 'checked' checks the image row; 'bare-folder' clears every checkbox, which
-  // is what turns the button into "Open Folder in VolView".
-  if (gesture === 'checked') {
-    await checkRowByItemId(driver, g.itemId);
+    launch = await openFromItemPage(driver, g.itemId);
   } else {
-    await uncheckAllRows(driver);
+    await gotoFolder(driver, g.folderId);
+    if (gesture === 'checked') {
+      await checkRowByItemId(driver, g.itemId);
+    } else if (gesture === 'filter') {
+      await fillFilterBox(driver, PATIENT2);
+      await checkRowByTexts(driver, [PATIENT2]);
+    } else {
+      await uncheckAllRows(driver);
+    }
+    launch = await openInVolView(driver);
   }
-  const launch = await openInVolView(driver);
   await waitForVolViewReady(launch.popup);
-  return { view: launch.popup, freshManifest: predicted, manifest: await launch.manifest };
+  return {
+    view: launch.popup,
+    freshManifest: urlsParam(launch.popup),
+    manifest: await launch.manifest,
+  };
+}
+
+function expectFreshRoute(g: Girder, gesture: Gesture, manifestUrl: string): void {
+  const route = new URL(manifestUrl, CONFIG.baseURL);
+  if (gesture === 'single-item') {
+    expect(route.pathname).toBe(`/${CONFIG.apiRoot}/item/${g.itemId}/volview`);
+    return;
+  }
+  expect(route.pathname).toBe(`/${CONFIG.apiRoot}/folder/${g.folderId}/volview`);
+  if (gesture === 'checked') {
+    expect(route.searchParams.get('items')).toBe(g.itemId);
+    expect(route.searchParams.has('folders')).toBeTruthy();
+  } else if (gesture === 'filter') {
+    expect(route.searchParams.has('filters'), 'grouped launch emitted no filters= leg').toBeTruthy();
+    expect(JSON.parse(route.searchParams.get('filters') || '[]')).not.toEqual([]);
+  } else {
+    expect(route.searchParams.has('items')).toBeTruthy();
+    expect(route.searchParams.get('items')).toBe('');
+    expect(route.searchParams.has('folders')).toBeTruthy();
+    expect(route.searchParams.get('folders')).toBe('');
+  }
 }
 
 test.describe('save/load/restore F5 lifecycle', () => {
-  let g: Girder;
+  const cases: Array<{ gesture: Exclude<Gesture, 'bare-folder'>; fixture: FixtureId }> = [
+    { gesture: 'single-item', fixture: 'lifecycle-single' },
+    { gesture: 'checked', fixture: 'lifecycle-checked' },
+    { gesture: 'filter', fixture: 'lifecycle-filter' },
+  ];
 
-  test.beforeEach(async ({ request, context }) => {
-    g = await setup(request, context);
-  });
-
-  for (const gesture of ['single-item', 'checked', 'filter'] as Gesture[]) {
+  for (const { gesture, fixture } of cases) {
     test(`${gesture}: fresh -> F5-stays-fresh -> save -> F5-resumes -> save-again -> F5-resumes`, async ({
       page,
+      context,
     }, info) => {
-      // 1. Launch through the real UI -> fresh: the picked manifest, never a
-      //    session zip. The urls= assertion doubles as the drift alarm: it is
-      //    what open.js actually emitted, checked against the replica.
+      const g = await setupFixture(context, fixture);
       const launched = await launchGesture(page, g, gesture);
       const view = launched.view;
       const freshManifest = launched.freshManifest;
       const m1 = launched.manifest;
       await shot(view, info, `${gesture}-1-launch-fresh`);
-      expect(urlsParam(view), 'launch urls= should be the picked manifest').toBe(freshManifest);
-      if (m1) {
-        expect(isSessionManifest(m1), `fresh launch must not load a session zip: ${resourceNames(m1)}`).toBeFalsy();
-        expect(resourceNames(m1).some((n) => n !== 'config.json')).toBeTruthy();
-      }
+      expectFreshRoute(g, gesture, freshManifest);
+      expect(
+        isSessionManifest(m1),
+        `fresh launch must not load a session zip: ${resourceNames(m1)}`
+      ).toBeFalsy();
+      expect(resourceNames(m1).some((name) => name !== 'config.json')).toBeTruthy();
 
-      // 2. F5 before saving -> STILL fresh: a session already in the folder must
-      //    not be substituted for the picked images.
       const m2 = await reloadCapturingManifest(view);
       await shot(view, info, `${gesture}-2-f5-stays-fresh`);
       expect(urlsParam(view), 'F5-before-save must not repoint').toBe(freshManifest);
-      if (m2) {
-        expect(isSessionManifest(m2), 'F5-before-save must not pull in a session').toBeFalsy();
-      }
+      if (m2) expect(isSessionManifest(m2), 'F5-before-save pulled in a session').toBeFalsy();
 
-      // 3. Save. The save repoints urls= to the response resumeUrl.
       const sessionsBefore = await countSessionItems(page.request, g);
       const resumeUrl1 = await remoteSave(view);
       await shot(view, info, `${gesture}-3-after-save`);
       expect(resumeUrl1, 'save response carried no resumeUrl').toBeTruthy();
       expect(urlsParam(view), 'urls= must repoint to the save resumeUrl').toBe(resumeUrl1);
       if (gesture !== 'single-item') {
-        // Folder-scoped save creates a NEW session.volview.zip item.
-        const sessionsAfter = await countSessionItems(page.request, g);
-        expect(sessionsAfter, 'folder save should add a session item').toBeGreaterThan(sessionsBefore);
+        expect(await countSessionItems(page.request, g)).toBeGreaterThan(sessionsBefore);
       }
 
-      // 4. F5 after save -> the just-made save reloads (resume).
       const m4 = await reloadCapturingManifest(view);
       await shot(view, info, `${gesture}-4-f5-resumes-save`);
       expect(urlsParam(view), 'F5-after-save must stay on the resumeUrl').toBe(resumeUrl1);
-      if (m4) {
-        expect(isSessionManifest(m4), `resume manifest should name the saved session: ${resourceNames(m4)}`).toBeTruthy();
-      }
+      if (m4) expect(isSessionManifest(m4), 'F5-after-save did not load the session').toBeTruthy();
 
       if (gesture === 'filter' || gesture === 'checked') {
-        // Redoing the SAME gesture from scratch: a filter pick resumes its
-        // matching save, but checking raw images is the "start fresh" gesture
-        // even when exactly this selection was just saved — resume rides only
-        // on the repointed resumeUrl (F5 above), never on a new checked launch.
-        const shouldResume = gesture === 'filter';
-        const reopenDriver = await page.context().newPage();
+        const reopenDriver = await context.newPage();
         const reopened = await launchGesture(reopenDriver, g, gesture);
+        const shouldResume = gesture === 'filter';
         expect(
           isSessionManifest(reopened.manifest),
           shouldResume
-            ? `reopening ${gesture} should resume matching work: ${resourceNames(reopened.manifest)}`
-            : `reopening checked raw picks must start fresh: ${resourceNames(reopened.manifest)}`
+            ? `reopening filter did not resume its save: ${resourceNames(reopened.manifest)}`
+            : `reopening checked raw images did not start fresh: ${resourceNames(reopened.manifest)}`
         ).toBe(shouldResume);
-        if (reopened.view !== reopenDriver) await reopened.view.close();
+        await reopened.view.close();
         await reopenDriver.close();
       }
 
-      // 5. Save again -> F5 -> the SECOND save reloads.
       const resumeUrl2 = await remoteSave(view);
       await shot(view, info, `${gesture}-5-after-second-save`);
       expect(resumeUrl2, 'second save carried no resumeUrl').toBeTruthy();
       expect(urlsParam(view)).toBe(resumeUrl2);
       await reloadCapturingManifest(view);
       await shot(view, info, `${gesture}-6-f5-resumes-second-save`);
-      expect(urlsParam(view), 'F5 after the second save must stay on the second resumeUrl').toBe(resumeUrl2);
+      expect(urlsParam(view), 'F5 after the second save left its resumeUrl').toBe(resumeUrl2);
     });
   }
 
-  test('fresh restart via checked raw images: starts clean, then F5 resumes the NEW save', async ({ page }, info) => {
-    // The user's "start over" workflow: an older save exists, they check the
-    // raw images to restart clean, annotate, save, and F5 must reload the NEW
-    // save (via the repointed resumeUrl) — not the older session, not fresh.
-    // Seed the older session (real UI gesture).
+  test('fresh restart via checked raw images starts clean, then F5 resumes the new save', async ({
+    page,
+    context,
+  }, info) => {
+    const g = await setupFixture(context, 'lifecycle-restart');
     const seed = await launchGesture(page, g, 'checked');
     const olderResume = await remoteSave(seed.view);
     expect(olderResume, 'seeding save carried no resumeUrl').toBeTruthy();
     await seed.view.close();
 
-    // Fresh restart: redoing the checked-raw gesture ignores the older save.
     const restart = await launchGesture(page, g, 'checked');
-    const view = restart.view;
-    await shot(view, info, 'restart-1-fresh-despite-older-save');
-    expect(urlsParam(view), 'checked raw restart must open fresh').toBe(restart.freshManifest);
-    if (restart.manifest) {
-      expect(
-        isSessionManifest(restart.manifest),
-        `restart must not resume the older save: ${resourceNames(restart.manifest)}`
-      ).toBeFalsy();
-    }
+    await shot(restart.view, info, 'restart-1-fresh-despite-older-save');
+    expectFreshRoute(g, 'checked', restart.freshManifest);
+    expect(
+      isSessionManifest(restart.manifest),
+      `restart resumed the older save: ${resourceNames(restart.manifest)}`
+    ).toBeFalsy();
 
-    // Save the restarted session (the annotate-then-save gesture).
-    const newResume = await remoteSave(view);
-    await shot(view, info, 'restart-2-after-save');
+    const newResume = await remoteSave(restart.view);
+    await shot(restart.view, info, 'restart-2-after-save');
     expect(newResume, 'restart save carried no resumeUrl').toBeTruthy();
-    expect(newResume, 'the new save must mint its own session item').not.toBe(olderResume);
+    expect(newResume, 'the new save reused the older session item').not.toBe(olderResume);
 
-    // F5 picks up the LATEST save.
-    const m2 = await reloadCapturingManifest(view);
-    await shot(view, info, 'restart-3-f5-resumes-new-save');
-    expect(urlsParam(view), 'F5 must reload the new save, not the older one').toBe(newResume);
-    if (m2) {
-      expect(
-        isSessionManifest(m2),
-        `F5 should load the saved session: ${resourceNames(m2)}`
-      ).toBeTruthy();
-    }
+    const manifest = await reloadCapturingManifest(restart.view);
+    await shot(restart.view, info, 'restart-3-f5-resumes-new-save');
+    expect(urlsParam(restart.view)).toBe(newResume);
+    if (manifest) expect(isSessionManifest(manifest)).toBeTruthy();
   });
 
-  test('bare folder-open resumes the newest session (after a folder-scoped save)', async ({ page }, info) => {
-    // Guarantee a session exists in the folder: launch the checked gesture and save.
+  test('bare folder-open resumes the newest folder-scoped save', async ({ page, context }, info) => {
+    const g = await setupFixture(context, 'lifecycle-bare');
     const seed = await launchGesture(page, g, 'checked');
     const seededResume = await remoteSave(seed.view);
     expect(seededResume).toBeTruthy();
     await seed.view.close();
 
-    // Now the BARE folder-open (the button with nothing checked) must resume
-    // the newest session, not raw images.
     const bare = await launchGesture(page, g, 'bare-folder');
-    await shot(bare.view, info, `bare-folder-resumes-newest`);
-    expect(urlsParam(bare.view)).toBe(bare.freshManifest); // bare folder manifest route
-    if (bare.manifest) {
-      expect(
-        isSessionManifest(bare.manifest),
-        `bare open should resume a session: ${resourceNames(bare.manifest)}`
-      ).toBeTruthy();
-    }
+    await shot(bare.view, info, 'bare-folder-resumes-newest');
+    expectFreshRoute(g, 'bare-folder', bare.freshManifest);
+    expect(
+      isSessionManifest(bare.manifest),
+      `bare open did not resume a session: ${resourceNames(bare.manifest)}`
+    ).toBeTruthy();
   });
 
-  test('checking an OLDER session opens THAT save, not the newest', async ({ page }, info) => {
-    // The back-in-history gesture. launch.py promises an explicitly checked
-    // session item "opens through to EXACTLY that session ... never re-match it
-    // to a newer sibling save" — which only means anything when a newer save
-    // exists to be wrongly substituted, so make two.
-    const checked = launchUrl(g, 'checked');
-    await gotoCapturingManifest(page, checked.url);
-
-    const olderResume = await remoteSave(page);
-    expect(olderResume, 'first save carried no resumeUrl').toBeTruthy();
-    const newerResume = await remoteSave(page);
-    expect(newerResume, 'second save carried no resumeUrl').toBeTruthy();
-    expect(newerResume, 'the second save must mint its own session item').not.toBe(olderResume);
+  test('checking an older session opens that save, not the newest', async ({ page, context }, info) => {
+    const g = await setupFixture(context, 'lifecycle-older');
+    const checked = await launchGesture(page, g, 'checked');
+    const olderResume = await remoteSave(checked.view);
+    const newerResume = await remoteSave(checked.view);
+    expect(olderResume).toBeTruthy();
+    expect(newerResume).toBeTruthy();
+    expect(newerResume).not.toBe(olderResume);
+    await checked.view.close();
 
     const idOf = (resumeUrl: string) => resumeUrl.split('/item/')[1].split('/volview')[0];
     const olderId = idOf(olderResume);
     const newerId = idOf(newerResume);
-    // Discriminate by FILE id, not name: girder dedupes the colliding item
-    // names but the file inside each keeps the original "session.volview.zip",
-    // so names cannot tell the two saves apart in a manifest.
     const olderFileId = await firstFileId(page.request, g.token, olderId);
     const newerFileId = await firstFileId(page.request, g.token, newerId);
-    expect(olderFileId, 'the two saves share a file id').not.toBe(newerFileId);
+    expect(olderFileId).not.toBe(newerFileId);
 
-    // Check ONLY the older session row: a single session item with no folders
-    // opens directly, with no "Will open newest VolView session" confirm.
-    await page.goto(`${CONFIG.baseURL}/#folder/${g.folderId}`, { waitUntil: 'domcontentloaded' });
-    const olderRow = page.locator(`li.g-item-list-entry:has(a[href="#item/${olderId}"])`);
-    await expect(olderRow, 'the older session item is not listed in the folder').toBeVisible();
-    await olderRow.locator('input.g-list-checkbox').check();
+    await gotoFolder(page, g.folderId);
+    await checkRowByItemId(page, olderId);
+    const launch = await openInVolView(page);
+    await waitForVolViewReady(launch.popup);
+    await shot(launch.popup, info, 'older-session-reopened');
 
-    const popupPromise = page.waitForEvent('popup');
-    await page.locator('.open-in-volview').click();
-    const popup = await popupPromise;
-    await popup.waitForLoadState('domcontentloaded');
-    await waitForVolViewReady(popup);
-    await shot(popup, info, 'older-session-reopened');
-
-    const urls = urlsParam(popup);
-    expect(urls, 'the launch must carry the OLDER session id').toContain(`items=${olderId}`);
-    expect(urls, 'the newer session must not be launched').not.toContain(`items=${newerId}`);
-
-    // Read the manifest by the tab's own urls= leg rather than intercepting:
-    // the popup can resolve its request before an interceptor could attach.
-    const m = await fetchManifest(page.request, g.token, urls);
-    expect(isSessionManifest(m), `reopening an older save should resume a session: ${resourceNames(m)}`).toBeTruthy();
-    const urlsInManifest = resourceUrls(m).join(' ');
-    expect(urlsInManifest, 'the OLDER save must be what loaded').toContain(`/file/${olderFileId}/`);
-    expect(urlsInManifest, 'the newest save must NOT be substituted').not.toContain(`/file/${newerFileId}/`);
-    await popup.close();
+    const urls = urlsParam(launch.popup);
+    expect(urls).toContain(`items=${olderId}`);
+    expect(urls).not.toContain(`items=${newerId}`);
+    const manifest = await fetchManifest(page.request, g.token, urls);
+    const manifestUrls = resourceUrls(manifest).join(' ');
+    expect(manifestUrls, 'the older save was not loaded').toContain(`/file/${olderFileId}/`);
+    expect(manifestUrls, 'the newest save was substituted').not.toContain(`/file/${newerFileId}/`);
   });
 
-  test('the plugin emits the launch URL the tests synthesize (checked images)', async ({ page }) => {
-    // launchUrl() in helpers/girder.ts is a REPLICA of open.js. Every launch
-    // test drives that replica, so if the product's URL construction changed
-    // underneath them they would all keep passing against a URL the plugin no
-    // longer emits. This pins the replica to the real button.
-    await page.goto(`${CONFIG.baseURL}/#folder/${g.folderId}`, { waitUntil: 'domcontentloaded' });
-    const imageRow = page.locator(`li.g-item-list-entry:has(a[href="#item/${g.itemId}"])`);
-    await expect(imageRow).toBeVisible();
-    await imageRow.locator('input.g-list-checkbox').check();
+  test('the checked-image button carries the complete launch contract', async ({ page, context }) => {
+    const g = await setupFixture(context, 'lifecycle-url-contract');
+    await gotoFolder(page, g.folderId);
+    await checkRowByItemId(page, g.itemId);
 
     const button = page.locator('.open-in-volview');
-    // Also gates on the checkbox handler having re-rendered the href.
     await expect(button).toHaveText(/Open Checked in VolView/);
     const href = await button.getAttribute('href');
     expect(href, 'the open button carries no href').toBeTruthy();
 
     const actual = new URL(href!, CONFIG.baseURL);
-    const expected = new URL(launchUrl(g, 'checked').url);
-    expect(actual.pathname, 'VolView dist path').toBe(expected.pathname);
-    for (const leg of ['urls', 'names', 'config']) {
-      expect(actual.searchParams.get(leg), `${leg}= leg drifted from open.js`).toBe(
-        expected.searchParams.get(leg)
-      );
-    }
+    expect(actual.pathname).toBe('/static/built/plugins/volview/index.html');
+    expect(actual.searchParams.get('names')).toBe('[manifest.json]');
+    expect(actual.searchParams.get('config')).toBe(
+      `/${CONFIG.apiRoot}/folder/${g.folderId}/volview_config/.volview_config.yaml`
+    );
 
-    // save= is compared semantically, not textually: the plugin omits an
-    // undefined `folders` key where the replica writes an explicit [], and the
-    // backend defaults the two the same way.
-    const saveLeg = (u: URL) => {
-      const save = new URL(u.searchParams.get('save')!, CONFIG.baseURL);
-      const linked = JSON.parse(save.searchParams.get('metadata') || '{}').linkedResources || {};
-      return { path: save.pathname, items: linked.items || [], folders: linked.folders || [] };
-    };
-    expect(saveLeg(actual), 'save= leg drifted from open.js').toEqual(saveLeg(expected));
+    const manifest = new URL(actual.searchParams.get('urls')!, CONFIG.baseURL);
+    expect(manifest.pathname).toBe(`/${CONFIG.apiRoot}/folder/${g.folderId}/volview`);
+    expect(manifest.searchParams.has('folders')).toBeTruthy();
+    expect(manifest.searchParams.get('folders')).toBe('');
+    expect(manifest.searchParams.get('items')).toBe(g.itemId);
+
+    const save = new URL(actual.searchParams.get('save')!, CONFIG.baseURL);
+    expect(save.pathname).toBe(`/${CONFIG.apiRoot}/folder/${g.folderId}/volview`);
+    const linked = JSON.parse(save.searchParams.get('metadata') || '{}').linkedResources || {};
+    expect(linked.items).toEqual([g.itemId]);
+    expect(linked.folders || []).toEqual([]);
   });
 
-  test('checking a saved session in Girder opens that session', async ({ page }) => {
-    const checked = launchUrl(g, 'checked');
-    await gotoCapturingManifest(page, checked.url);
-    const resumeUrl = await remoteSave(page);
+  test('checking a saved session in Girder opens that session', async ({ page, context }) => {
+    const g = await setupFixture(context, 'lifecycle-session-row');
+    const checked = await launchGesture(page, g, 'checked');
+    const resumeUrl = await remoteSave(checked.view);
     expect(resumeUrl).toBeTruthy();
     const sessionId = resumeUrl.split('/item/')[1].split('/volview')[0];
+    await checked.view.close();
 
-    await page.goto(`${CONFIG.baseURL}/#folder/${g.folderId}`, {
-      waitUntil: 'domcontentloaded',
-    });
-    const sessionRow = page.locator(
-      `li.g-item-list-entry:has(a[href="#item/${sessionId}"])`
-    );
-    const imageRow = page.locator(
-      `li.g-item-list-entry:has(a[href="#item/${g.itemId}"])`
-    );
-    await expect(sessionRow).toBeVisible();
-    await expect(imageRow).toBeVisible();
-    await sessionRow.locator('input.g-list-checkbox').check();
-    await imageRow.locator('input.g-list-checkbox').check();
+    await gotoFolder(page, g.folderId);
+    await checkRowByItemId(page, sessionId);
+    await checkRowByItemId(page, g.itemId);
 
-    await page.locator('.open-in-volview').click();
-    await expect(page.locator('.modal-content')).toContainText(
-      'Will open newest VolView session'
-    );
     const popupPromise = page.waitForEvent('popup');
+    await page.locator('.open-in-volview').click();
+    await expect(page.locator('.modal-content')).toContainText('Will open newest VolView session');
     await page.locator('#g-confirm-button').click();
     const popup = await popupPromise;
     await popup.waitForLoadState('domcontentloaded');
     await waitForVolViewReady(popup);
-
     expect(urlsParam(popup)).toContain(`items=${sessionId}`);
   });
 });

@@ -108,20 +108,17 @@ ahead of the latest published contract the conformance tests are expected to be
 red; they go green once VolView publishes (a merge-to-main dev release) and the
 `volview` pin here is bumped to it.
 
-## Browser e2e suites
+## Browser e2e harness
 
-`e2e/` holds two Playwright suites against a locally deployed paired stack:
-
-- `npm test` (in `e2e/`) — the save/load/restore + jobs lifecycle against THIS
-  worktree's deploy.
-- `npm run compat` — the backwards-compatibility harness: exports the pinned
-  baseline commit from git history, deploys it, saves real sessions through its
-  client, redeploys this worktree, and verifies those sessions still restore.
-  No second checkout and no committed fixtures. See
-  [compat-e2e.md](compat-e2e.md).
+`e2e/` has one Playwright harness. `npm test` exports and deploys the pinned
+baseline, captures sessions through its real UI, redeploys this worktree,
+verifies backwards compatibility, and then runs fresh current-version
+save/load/restore and job scenarios. `npm run compat` is an alias for the same
+coverage-first run. No second backend checkout or committed session fixture is
+required. See [compat-e2e.md](compat-e2e.md).
 
 Both deploy through `script/deploy`, which reads machine-specific paths from a
 gitignored repo-root `.env` (copy `.env.example`).
 
-Sample-data tooling (DICOM seeding for manual exercise and the compat suite's
-small tier) lives in [`e2e/seed/`](../e2e/seed/README.md).
+Sample-data tooling (including the harness's cached DICOM tier) lives in
+[`e2e/seed/`](../e2e/seed/README.md).

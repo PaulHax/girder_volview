@@ -10,8 +10,6 @@ import { apiUrl } from '../../helpers/config';
 
 const PET_DESC = 'PET NAC OSEM';
 
-test.describe.configure({ mode: 'serial' });
-
 test.describe('compat verify: devkit study drill-down', () => {
   let state: CompatState;
 

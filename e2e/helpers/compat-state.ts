@@ -1,11 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-// State bridging the compat CAPTURE phase (run against a main deploy) to the
-// VERIFY phase (run against this branch's deploy, after a redeploy in between).
-// Unlike .e2e-state.json this file must survive across Playwright invocations,
-// so it has its own lifecycle: capture setup writes it, verify teardown deletes
-// it (unless COMPAT_KEEP=1).
+// State shared by the harness's Playwright invocations: baseline capture,
+// current verification, and current-only behavior. Capture writes it and the
+// orchestrator's final phase deletes it unless COMPAT_KEEP=1.
 
 export type RulerRecord = {
   // The rendered measurement, e.g. "40.00mm" — world coordinates live in the
@@ -31,6 +29,25 @@ export type GestureId =
   | 'study-layered'
   | 'single-item'
   | 'devkit-study';
+
+export type FixtureId =
+  | Exclude<GestureId, 'devkit-study'>
+  | 'lifecycle-single'
+  | 'lifecycle-checked'
+  | 'lifecycle-filter'
+  | 'lifecycle-restart'
+  | 'lifecycle-bare'
+  | 'lifecycle-older'
+  | 'lifecycle-session-row'
+  | 'lifecycle-url-contract'
+  | 'jobs-comeback'
+  | 'jobs-live';
+
+export type FixtureFolder = {
+  folderId: string;
+  itemIds: string[];
+  itemNames: string[];
+};
 
 export type LaunchDescriptor =
   | { via: 'checked-items'; itemIds: string[] }
@@ -59,16 +76,12 @@ export type CapturedGesture = {
 
 export type CompatState = {
   createdAt: string;
-  mainGirderSha: string;
-  mainVolviewSha: string;
+  sourceGirderSha: string;
+  sourceVolviewSha: string;
   runRootFolderId: string;
-  nrrdFolderId: string;
-  // The single-item gesture gets its own folder so its in-item session zip can
-  // never shadow the nrrd folder's newest-session resume ordering.
-  singleFolderId: string;
-  dicomFolderId: string;
-  itemIds: Record<string, string[]>;
-  itemNames: Record<string, string[]>;
+  // Every scenario owns its folder. Saves and checkbox state from one test can
+  // therefore never alter another test's launch semantics.
+  fixtures: Record<FixtureId, FixtureFolder>;
   token: string;
   provisioned: boolean;
   dicomSeeded: boolean;
@@ -98,8 +111,14 @@ export function clearCompatState(): void {
   }
 }
 
-// Capture specs append gestures one test at a time; read-modify-write keeps the
-// file the single source of truth across the serial worker.
+export function requireFixture(state: CompatState, id: FixtureId): FixtureFolder {
+  const fixture = state.fixtures[id];
+  if (!fixture) throw new Error(`[compat] fixture '${id}' was not provisioned`);
+  return fixture;
+}
+
+// Capture specs append gestures one test at a time; the harness uses one worker,
+// so read-modify-write keeps the file the source of truth across the phase.
 export function appendGesture(gesture: CapturedGesture): void {
   const state = readCompatState();
   if (!state) throw new Error('[compat] no state file — did capture setup run?');

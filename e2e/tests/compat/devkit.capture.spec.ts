@@ -22,8 +22,6 @@ const PATIENT1 = 'ACRIN-NSCLC-FDG-PET-017';
 const CT_DESC = 'CT IMAGES';
 const PET_DESC = 'PET NAC OSEM';
 
-test.describe.configure({ mode: 'serial' });
-
 test.describe('compat capture: devkit study drill-down', () => {
   let state: CompatState;
 

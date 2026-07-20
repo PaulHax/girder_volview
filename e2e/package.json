@@ -4,7 +4,7 @@
   "private": true,
   "description": "Browser e2e for girder_volview + VolView.",
   "scripts": {
-    "test": "playwright test",
+    "test": "bash scripts/compat.sh",
     "typecheck": "tsc --noEmit",
     "list": "playwright test --list",
     "install-browser": "playwright install chromium",
@@ -13,6 +13,7 @@
     "compat:capture": "bash scripts/compat.sh --phase capture",
     "compat:verify": "bash scripts/compat.sh --phase verify",
     "compat:verify-fast": "bash scripts/compat.sh --phase verify --skip-deploy --keep",
+    "current": "bash scripts/compat.sh --phase current --skip-deploy",
     "compat:clean": "bash ../script/clean-compat"
   },
   "devDependencies": {

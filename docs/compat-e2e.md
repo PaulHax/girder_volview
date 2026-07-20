@@ -1,10 +1,10 @@
-# Backwards-compatibility e2e (sessions saved by main)
+# Browser lifecycle and backwards-compatibility e2e
 
-Proves that `session.volview.zip` files saved by an **older** girder_volview +
-VolView client still open, restore their content, and re-save correctly on the
-current branch. Sessions are generated live each run: the harness deploys the
-baseline, drives the real girder UI to save sessions through its client,
-redeploys the current worktree, then verifies.
+This is the project's single browser-test infrastructure. It proves that
+`session.volview.zip` files saved by an **older** girder_volview + VolView client
+still restore and re-save correctly, then exercises fresh current-version
+save/load/restore and job behavior. Every launch goes through the real Girder UI;
+the browser tests do not synthesize VolView launch URLs.
 
 ```
 e2e/scripts/compat.sh
@@ -12,7 +12,8 @@ e2e/scripts/compat.sh
  ├─ script/deploy <baseline export> main             # baseline backend + client
  ├─ playwright --project capture                     # save sessions on the baseline
  ├─ script/deploy <this worktree> just-jobs          # branch backend + client
- └─ playwright --project verify                      # sessions must restore
+ ├─ playwright --project verify                      # old sessions must restore
+ └─ playwright --project current                     # fresh lifecycle + jobs
 ```
 
 Neither the old sources nor the session zips they produce are committed. Both
@@ -26,7 +27,7 @@ still there for step 4. The bridge between the two playwright invocations is
 `e2e/.compat-state.json` (gitignored): session item ids, launch descriptors,
 and the expected content per gesture.
 
-## What each gesture proves
+## What the harness proves
 
 | Gesture | Launch (real girder UI, on the baseline) | Content saved | Verified on the branch |
 |---|---|---|---|
@@ -42,9 +43,24 @@ the re-saved zip's manifest must keep rulers/segment groups/layers (schema
 migrations are fine; content loss is not). Screenshots are attached to the
 report as evidence, never asserted on.
 
-The small DICOM tier is real IDC data (ACRIN NSCLC FDG-PET/CT, CC-BY): the
+The current project covers behavior that an old-session restore cannot prove:
+
+- fresh single-item, checked-image, and grouped-filter launches;
+- F5 before save staying fresh, and F5 after first and second saves resuming;
+- checked raw images deliberately restarting instead of resuming;
+- bare-folder newest-session selection and exact older-session selection;
+- the launch button's `urls`, `save`, `config`, and `names` contract;
+- saved-session rows, completed-job loading, and live job auto-apply.
+
+Each scenario owns a folder. Session items, checkboxes, job outputs, and grouped
+list state therefore cannot leak into another test. Tests use one worker for a
+predictable load on the deployed stack, but they are not Playwright `serial`
+groups: one failure does not mark the remaining scenarios as unrun.
+
+The DICOM fixtures use real IDC data (ACRIN NSCLC FDG-PET/CT, CC-BY): the
 devkit's pinned `patient-01/study-01/{CT,PET}` + `patient-02/study-01/CT`
-series at 12 slices each, plain-uploaded by `seed.py seed-small` with
+series at 12 slices each. Each grouped scenario gets its own plain-uploaded copy,
+with
 `meta.dicom.*` set, plus `e2e/fixtures/dicom.large_image_config.yaml` so the
 folder groups into series rows with a filter box.
 
@@ -89,11 +105,13 @@ To move the baseline forward, resolve the new sha and edit
 `e2e/compat-baseline.json`. It is pinned rather than floating so that a red
 compat run is bisectable — "did main move, or did I break it?" has an answer.
 
-Full run (two deploys, roughly 10–15 minutes):
+Full coverage-first run (two deploys):
 
 ```bash
-cd e2e && npm run compat
+cd e2e && npm test
 ```
+
+`npm run compat` is an alias for the same run.
 
 Iterating:
 
@@ -101,6 +119,7 @@ Iterating:
 npm run compat:verify-fast    # verify only, no redeploy, keep state for re-runs
 npm run compat:capture        # capture half only (deploys main first)
 bash scripts/compat.sh --phase capture --skip-deploy   # re-capture, baseline already deployed
+bash scripts/compat.sh --phase current --skip-deploy   # current scenarios using retained state
 bash scripts/compat.sh --link                          # fast client deploys (docker cp, no npm pack)
 npm run compat:clean          # remove materialized baselines (handles root-owned residue)
 npm run report                # html report of the last phase
@@ -137,8 +156,8 @@ gesture then runs automatically and cleans up the session items it mints.
   rather than derived. That claim is backstopped: the deploy compares the
   mounted backend tree hash against the tree it was handed, and
   `materialize-baseline.sh` is the only thing that writes those trees.
-- The normal suite (`npm test`) ignores `tests/compat/` entirely; compat specs
-  run only under `compat.playwright.config.ts`, which refuses to start without
-  `COMPAT_PHASE`.
+- One `playwright.config.ts` defines the capture, verify, and current projects.
+  Its setup refuses to start without the phase selected by `scripts/compat.sh`,
+  preventing a partial direct invocation from silently testing the wrong deploy.
 - CI does not run this harness, and carries no browser job at all; it is a
   local tool by design.

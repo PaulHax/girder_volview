@@ -9,6 +9,8 @@ set -euo pipefail
 #      (expected backend + client shas carry the pins past the deploy guard)
 #   3. redeploy THIS worktree + its paired VolView
 #   4. playwright `verify` project — sessions must restore + re-save
+#   5. playwright `current` project — fresh current sessions, restart/history,
+#      grouped DICOM launches, and job submission, all on isolated folders
 #
 # The stack itself (a running docker compose project, dsa-plus by default) must
 # already exist; script/deploy only swaps the code it serves. Mongo survives the
@@ -19,7 +21,7 @@ set -euo pipefail
 # pinned by e2e/compat-baseline.json. Neither the old sources nor the session
 # zips they produce are ever committed — both are reproducible from a sha.
 #
-# Usage: compat.sh [--phase all|capture|verify] [--skip-deploy] [--link] [--keep]
+# Usage: compat.sh [--phase all|capture|verify|current] [--skip-deploy] [--link] [--keep]
 #
 #   --phase        which half to run (default all)
 #   --skip-deploy  don't deploy (the stack already serves the right code)
@@ -55,7 +57,7 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac
 done
-case "$PHASE" in all|capture|verify) ;; *) echo "--phase must be all|capture|verify" >&2; exit 2 ;; esac
+case "$PHASE" in all|capture|verify|current) ;; *) echo "--phase must be all|capture|verify|current" >&2; exit 2 ;; esac
 
 die() { echo "compat: $*" >&2; exit 1; }
 
@@ -105,7 +107,7 @@ if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == capture) ]]; then
     BASELINE_VOLVIEW=$(resolve_volview "$BASELINE_VOLVIEW")
     require_volview_sha "$BASELINE_VOLVIEW" "$BASELINE_VOLVIEW_SHA" baseline
 fi
-if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == verify) ]]; then
+if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == verify || $PHASE == current) ]]; then
     BRANCH_VOLVIEW=$(resolve_volview "$BRANCH_VOLVIEW")
     require_volview_sha "$BRANCH_VOLVIEW" "$BRANCH_VOLVIEW_SHA" branch
 fi
@@ -147,7 +149,7 @@ run_capture() {
         cd "$E2E"
         COMPAT_PHASE=capture E2E_EXPECT_GIRDER_SHA=$MAIN_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BASELINE_VOLVIEW_SHA \
-            npx playwright test --config compat.playwright.config.ts --project capture
+            npx playwright test --config playwright.config.ts --project capture
     )
 }
 
@@ -160,14 +162,27 @@ run_verify() {
     (
         cd "$E2E"
         if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
+        if [[ $PHASE == verify ]]; then export COMPAT_CLEANUP=1; fi
         COMPAT_PHASE=verify E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
             E2E_EXPECT_VOLVIEW_SHA=$BRANCH_VOLVIEW_SHA \
-            npx playwright test --config compat.playwright.config.ts --project verify
+            npx playwright test --config playwright.config.ts --project verify
+    )
+}
+
+run_current() {
+    echo "compat: running current-version lifecycle and job scenarios (${BRANCH_SHA:0:9})..."
+    (
+        cd "$E2E"
+        if [[ $KEEP -eq 1 ]]; then export COMPAT_KEEP=1; fi
+        COMPAT_PHASE=current COMPAT_CLEANUP=1 E2E_EXPECT_GIRDER_SHA=$BRANCH_SHA \
+            E2E_EXPECT_VOLVIEW_SHA=$BRANCH_VOLVIEW_SHA \
+            npx playwright test --config playwright.config.ts --project current
     )
 }
 
 if [[ $PHASE == all || $PHASE == capture ]]; then run_capture; fi
 if [[ $PHASE == all || $PHASE == verify ]]; then run_verify; fi
+if [[ $PHASE == all || $PHASE == current ]]; then run_current; fi
 
-echo "compat: done — sessions saved by ${MAIN_SHA:0:9} verified on ${BRANCH_SHA:0:9}."
+echo "compat: done — source sessions verified and current lifecycles exercised on ${BRANCH_SHA:0:9}."
 echo "compat: report: cd e2e && npm run report"

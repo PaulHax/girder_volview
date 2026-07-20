@@ -7,6 +7,7 @@ import {
   GestureId,
   LaunchDescriptor,
   RulerRecord,
+  requireFixture,
 } from '../../helpers/compat-state';
 import { waitForVolViewReady, remoteSave, shot } from '../../helpers/volview';
 import { isSessionManifest, resourceNames } from '../../helpers/manifest';
@@ -44,8 +45,6 @@ const PATIENT1 = 'ACRIN-NSCLC-FDG-PET-017';
 const PATIENT2 = 'ACRIN-NSCLC-FDG-PET-022';
 const CT_DESC = 'CT IMAGES';
 const PET_DESC = 'PET NAC OSEM';
-
-test.describe.configure({ mode: 'serial' });
 
 function requireState(): CompatState {
   const state = readCompatState();
@@ -113,7 +112,8 @@ test.describe('compat capture (against main deploy)', () => {
   });
 
   test('single-item: ruler, item-scoped save', async ({ page, request }, info) => {
-    const itemId = state.itemIds[state.singleFolderId][0];
+    const fixture = requireFixture(state, 'single-item');
+    const itemId = fixture.itemIds[0];
     const launch = await openFromItemPage(page, itemId);
     await expectFresh(launch);
     await waitForVolViewReady(launch.popup);
@@ -131,7 +131,7 @@ test.describe('compat capture (against main deploy)', () => {
 
     record(
       'single-item',
-      state.singleFolderId,
+      fixture.folderId,
       { via: 'item-page', itemId },
       { datasetNames, rulers, segmentGroupNames: [], petLayer: false },
       zip
@@ -139,8 +139,9 @@ test.describe('compat capture (against main deploy)', () => {
   });
 
   test('checked-nrrd: ruler + painted segment group, folder save', async ({ page, request }, info) => {
-    const itemIds = state.itemIds[state.nrrdFolderId];
-    await gotoFolder(page, state.nrrdFolderId);
+    const fixture = requireFixture(state, 'checked-nrrd');
+    const itemIds = fixture.itemIds;
+    await gotoFolder(page, fixture.folderId);
     for (const id of itemIds) await checkRowByItemId(page, id);
     const launch = await openInVolView(page);
     await expectFresh(launch);
@@ -157,7 +158,7 @@ test.describe('compat capture (against main deploy)', () => {
     const datasetNames = await readDatasetNames(launch.popup);
     await shot(launch.popup, info, 'capture-checked-nrrd-content');
 
-    const session = await saveAndDiffSession(request, state.token, state.nrrdFolderId, launch.popup);
+    const session = await saveAndDiffSession(request, state.token, fixture.folderId, launch.popup);
     const zip = await fetchZipSummary(request, state.token, session.sessionItemId);
     expect(zip.rulerCount).toBe(1);
     expect(zip.segmentGroupCount).toBeGreaterThan(0);
@@ -165,7 +166,7 @@ test.describe('compat capture (against main deploy)', () => {
 
     record(
       'checked-nrrd',
-      state.nrrdFolderId,
+      fixture.folderId,
       { via: 'checked-items', itemIds },
       { datasetNames, rulers, segmentGroupNames, petLayer: false },
       zip,
@@ -174,7 +175,8 @@ test.describe('compat capture (against main deploy)', () => {
   });
 
   test('filtered-dicom: filter box narrows, ruler, filter-linked save', async ({ page, request }, info) => {
-    await gotoFolder(page, state.dicomFolderId);
+    const fixture = requireFixture(state, 'filtered-dicom');
+    await gotoFolder(page, fixture.folderId);
     // Three series rows: p1 CT, p1 PET, p2 CT.
     await expectRow(page, [PATIENT1, CT_DESC]);
     await expectRow(page, [PATIENT1, PET_DESC]);
@@ -194,13 +196,13 @@ test.describe('compat capture (against main deploy)', () => {
     const datasetNames = await readDatasetNames(launch.popup);
     await shot(launch.popup, info, 'capture-filtered-dicom-content');
 
-    const session = await saveAndDiffSession(request, state.token, state.dicomFolderId, launch.popup);
+    const session = await saveAndDiffSession(request, state.token, fixture.folderId, launch.popup);
     const zip = await fetchZipSummary(request, state.token, session.sessionItemId);
     expect(zip.rulerCount).toBe(1);
 
     record(
       'filtered-dicom',
-      state.dicomFolderId,
+      fixture.folderId,
       { via: 'checked-rows', rows: [[PATIENT2]], filterText: PATIENT2 },
       { datasetNames, rulers, segmentGroupNames: [], petLayer: false },
       zip,
@@ -209,11 +211,12 @@ test.describe('compat capture (against main deploy)', () => {
   });
 
   test('study-layered: CT+PET checked, PET layered over CT, ruler', async ({ page, request }, info) => {
+    const fixture = requireFixture(state, 'study-layered');
     const rows = [
       [PATIENT1, CT_DESC],
       [PATIENT1, PET_DESC],
     ];
-    await gotoFolder(page, state.dicomFolderId);
+    await gotoFolder(page, fixture.folderId);
     for (const row of rows) await checkRowByTexts(page, row);
     const launch = await openInVolView(page);
     await expectFresh(launch);
@@ -228,14 +231,14 @@ test.describe('compat capture (against main deploy)', () => {
     const datasetNames = await readDatasetNames(launch.popup);
     await shot(launch.popup, info, 'capture-study-layered-content');
 
-    const session = await saveAndDiffSession(request, state.token, state.dicomFolderId, launch.popup);
+    const session = await saveAndDiffSession(request, state.token, fixture.folderId, launch.popup);
     const zip = await fetchZipSummary(request, state.token, session.sessionItemId);
     expect(zip.rulerCount).toBe(1);
     expect(zip.hasLayers, 'the PET layer should serialize into the session').toBeTruthy();
 
     record(
       'study-layered',
-      state.dicomFolderId,
+      fixture.folderId,
       { via: 'checked-rows', rows },
       { datasetNames, rulers, segmentGroupNames: [], petLayer: true },
       zip,

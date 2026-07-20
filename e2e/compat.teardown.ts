@@ -2,11 +2,10 @@ import { request as playwrightRequest, FullConfig } from '@playwright/test';
 import { readCompatState, clearCompatState } from './helpers/compat-state';
 import { teardownCompat } from './helpers/compat-provision';
 
-// The capture phase leaves everything in place for verify; only the verify
-// phase cleans up — unless COMPAT_KEEP=1 (iterating on verify).
+// The orchestrator chooses the final Playwright invocation by setting
+// COMPAT_CLEANUP=1. Earlier phases leave the run root and state in place.
 export default async function compatTeardown(_config: FullConfig): Promise<void> {
-  const phase = process.env.COMPAT_PHASE;
-  if (phase !== 'verify') return;
+  if (process.env.COMPAT_CLEANUP !== '1') return;
   if (process.env.COMPAT_KEEP === '1') {
     // eslint-disable-next-line no-console
     console.log('[compat] COMPAT_KEEP=1 — keeping run folder and state for iteration.');

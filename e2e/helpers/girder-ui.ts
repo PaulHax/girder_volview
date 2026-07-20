@@ -2,10 +2,10 @@ import { Page, expect } from '@playwright/test';
 import { CONFIG } from './config';
 import { isManifestGet } from './manifest';
 
-// Drivers for the REAL girder web UI: the large_image item list's filter box
-// and checkboxes, and the plugin's Open-in-VolView affordances. These launch
-// VolView the way a user does (open.js builds the URL), instead of the
-// synthetic launchUrl() replica in girder.ts.
+// Drivers for the real Girder web UI: the large_image item list's filter box
+// and checkboxes, and the plugin's Open-in-VolView affordances. All browser
+// scenarios launch through these product paths, so open.js always builds the
+// URL under test.
 
 // A VolView popup plus the manifest its boot fetched (undefined if none was
 // observed — e.g. an intercepted non-JSON response).
