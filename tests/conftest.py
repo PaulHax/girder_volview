@@ -1,22 +1,39 @@
 """Shared test scaffolding for the Mongo-backed route suites."""
 
 import io
-import os
 import socket
 import uuid
 
 import pytest
 
+# pytest_girder's own default for --mongo-uri. A resolved uri that differs from
+# it means someone configured Mongo deliberately, which changes an unreachable
+# probe from "developer is offline" into a misconfiguration worth failing on.
+_DEFAULT_MONGO_URI = "mongodb://localhost:27017"
+
+_mongoUri = _DEFAULT_MONGO_URI
+
+
+def pytest_configure(config):
+    # Captured at configure time, which precedes collection, so the module-level
+    # ``pytestmark`` skipif in each route suite sees the real uri.
+    global _mongoUri
+    _mongoUri = config.getoption("--mongo-uri", default=_DEFAULT_MONGO_URI)
+
 
 def mongo_reachable(timeout=0.5):
-    """Whether a live test Mongo is reachable.
+    """Whether the Mongo the ``db`` fixture will use is reachable.
 
-    Reads ``GIRDER_TEST_DB`` for a non-default host/port, defaulting to
-    ``localhost:27017``, and probes it with a short-timeout TCP connect so the
-    Mongo-backed route tests skip cleanly offline instead of erroring.
+    Probes the host/port from ``--mongo-uri`` -- the same option
+    ``pytest_girder``'s ``db`` fixture connects with, and the only thing that
+    actually selects a database -- so the Mongo-backed route suites skip cleanly
+    offline instead of erroring.
+
+    Raises when an explicitly configured Mongo is unreachable: silently skipping
+    there once left CI green while every route suite was being skipped.
     """
     host, port = "localhost", 27017
-    uri = os.environ.get("GIRDER_TEST_DB", "")
+    uri = _mongoUri or ""
     if uri.startswith("mongodb://"):
         netloc = uri[len("mongodb://") :].split("/", 1)[0].split(",", 1)[0]
         if ":" in netloc:
@@ -27,7 +44,14 @@ def mongo_reachable(timeout=0.5):
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
-    except OSError:
+    except OSError as err:
+        if uri != _DEFAULT_MONGO_URI:
+            raise RuntimeError(
+                f"--mongo-uri is {uri} but nothing is listening on {host}:{port}. "
+                "Refusing to skip the Mongo-backed route suites: an explicitly "
+                "configured Mongo that is unreachable is a broken run, not an "
+                "offline one."
+            ) from err
         return False
 
 

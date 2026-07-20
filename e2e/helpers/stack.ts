@@ -227,8 +227,12 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
   if (!receipt.backendTreeMd5) {
     throw new Error(`[e2e] deploy receipt has no backendTreeMd5. ${RECEIPT_HINT}`);
   }
-  if (receipt.girderWorktree && existsSync(receipt.girderWorktree)) {
-    const currentBackendMd5 = pythonTreeMd5(receipt.girderWorktree);
+  // The receipt's backendTreeMd5 covers the installed PACKAGE directory, so hash
+  // the worktree's package directory too -- hashing the worktree root sweeps in
+  // setup.py, tests/ and e2e/seed/, which can never match.
+  const backendPkg = path.join(receipt.girderWorktree ?? '', 'girder_volview');
+  if (receipt.girderWorktree && existsSync(backendPkg)) {
+    const currentBackendMd5 = pythonTreeMd5(backendPkg);
     if (currentBackendMd5 !== receipt.backendTreeMd5) {
       throw new Error(
         `[e2e] girder_volview worktree hash is ${currentBackendMd5}, but the deployed ` +

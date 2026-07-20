@@ -315,6 +315,61 @@ def test_checked_old_filter_session_opens_that_session_not_newest(
 
 
 @pytest.mark.plugin("volview")
+def test_filter_session_resolving_to_no_files_falls_back_to_fresh(
+    server, owner, folder, monkeypatch
+):
+    # A matched filter session that resolves to NO loadable files must take the
+    # fresh leg, not emit a manifest of nothing but config.json. Guards the
+    # empty-list-vs-None distinction: getFilteredSessionFile returns None for
+    # "no session matched" but [] for "matched, nothing loadable", and gating on
+    # `is None` let [] through as a resolved session -- a permanently blank
+    # viewer with no gesture that recovers it.
+    from girder_volview.backend import launch
+
+    filter_ = [{"meta.pick": "yes"}]
+    _uploadFile(folder, owner, "keep.nrrd", meta={"pick": "yes"})
+    _saveToFolder(server, folder, owner, b"annotated", {"filter": filter_})
+
+    monkeypatch.setattr(
+        launch, "getFilteredSessionFile", lambda folder, filters, user: []
+    )
+    resp = _folderManifest(
+        server, folder, owner, params={"filters": json.dumps(filter_)}, exception=True
+    )
+
+    names = _resourceNames(resp)
+    assert "keep.nrrd" in names, "empty session must fall back to the filtered images"
+    assert names != ["config.json"]
+
+
+@pytest.mark.plugin("volview")
+def test_save_with_non_dict_metadata_does_not_orphan_an_item(server, owner, folder):
+    # jsonParam hands back whatever the client sent. A list must not reach the
+    # post-upload `.get`, where the AttributeError would 500 only AFTER the zip
+    # was stored -- reporting failure while leaving an orphan session item.
+    from girder.models.folder import Folder as FolderModel
+
+    resp = server.request(
+        path="/folder/%s/volview" % folder["_id"],
+        method="POST",
+        user=owner,
+        body=b"annotated",
+        type="application/zip",
+        isJson=True,
+        exception=True,
+        params={"metadata": json.dumps([{"linkedResources": {}}])},
+    )
+
+    assert "resumeUrl" in resp.json
+    sessions = [
+        item
+        for item in FolderModel().childItems(folder)
+        if item["name"].endswith(".volview.zip")
+    ]
+    assert len(sessions) == 1, "exactly the one saved session, no orphan"
+
+
+@pytest.mark.plugin("volview")
 def test_filters_must_be_json_object_or_array(server, owner, folder):
     resp = _folderManifest(
         server, folder, owner, params={"filters": json.dumps("not-a-dict")}

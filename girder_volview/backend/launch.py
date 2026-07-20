@@ -197,6 +197,12 @@ def saveToItem(self, itemId):
 )
 def saveToFolder(self, folderId, metadata):
     user = self.getCurrentUser()
+    # jsonParam yields whatever the client sent, so `metadata` can be a list or
+    # scalar. Coerce before the upload -- same "don't fail the save on an
+    # unexpected shape" stance as uploadSession, and a guard placed after the
+    # upload would raise only once the zip is stored, 500ing on an orphan item.
+    if not isinstance(metadata, dict):
+        metadata = {}
     fileDic = _uploadWholeSession(
         Folder, folderId, user, "girder.api.v1.folder.volview_save", metadata
     )
@@ -321,7 +327,11 @@ def downloadResourceManifest(self, folder, folders, items, filters):
         ]
     elif filters:
         files = getFilteredSessionFile(folder, filters, user)
-        if files is None:
+        # Empty is treated as no-match, not as a resolved session: a matched
+        # session whose files are all unloadable would otherwise skip the fresh
+        # leg and emit a manifest of nothing but config.json — a blank viewer
+        # with no gesture that recovers it.
+        if not files:
             files = getFilteredFiles(folder, filters)
             # The filter row owns every file it matched — no loadability gate
             # (grouped DICOM rows carry extensionless slices). Only working
