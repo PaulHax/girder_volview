@@ -95,11 +95,12 @@ service's volume list by mount target, so it replaces upstream's hardcoded
 - **VolView worktrees** `main` and `just-jobs` under `VOLVIEW_ROOT` (override
   `COMPAT_BASELINE_VOLVIEW` / `COMPAT_BRANCH_VOLVIEW`). The baseline's VolView
   sha and published npm version are recorded in `e2e/compat-baseline.json` so
-  the pairing is reproducible off this machine; the branch-side client is
-  unpublished and must build from source. Before either deploy, the harness
-  requires each checkout's HEAD to equal its manifest pin. A one-off checkout
-  override therefore needs a matching `COMPAT_BASELINE_VOLVIEW_SHA` or
-  `COMPAT_BRANCH_VOLVIEW_SHA` override too.
+  the old pairing is reproducible off this machine; its checkout must match that
+  pin (or an explicit `COMPAT_BASELINE_VOLVIEW_SHA`). The branch-side client is
+  unpublished and must build from source. Its expected sha is read from the
+  configured worktree at run start, so active development can advance without
+  editing the baseline manifest. Set `COMPAT_BRANCH_VOLVIEW_SHA` only to assert
+  that the current checkout is at one particular commit.
 
 To move the baseline forward, resolve the new sha and edit
 `e2e/compat-baseline.json`. It is pinned rather than floating so that a red
@@ -121,6 +122,7 @@ npm run compat:capture        # capture half only (deploys main first)
 bash scripts/compat.sh --phase capture --skip-deploy   # re-capture, baseline already deployed
 bash scripts/compat.sh --phase current --skip-deploy   # current scenarios using retained state
 bash scripts/compat.sh --link                          # fast client deploys (docker cp, no npm pack)
+COMPAT_BRANCH_VOLVIEW=/abs/path/to/VolView/just-jobs npm test  # another current checkout
 npm run compat:clean          # remove materialized baselines (handles root-owned residue)
 npm run report                # html report of the last phase
 ```
@@ -141,8 +143,9 @@ gesture then runs automatically and cleans up the session items it mints.
   client shas to equal the intended checkouts. The capture phase runs against
   the baseline pair on purpose, so `compat.sh` passes both
   `E2E_EXPECT_GIRDER_SHA=<baseline sha>` and
-  `E2E_EXPECT_VOLVIEW_SHA=<baseline client sha>`; verify passes both branch
-  pins. Outside compat, the backend expectation is this worktree and the client
+  `E2E_EXPECT_VOLVIEW_SHA=<baseline client sha>`; verify passes this backend's
+  HEAD and the current client HEAD captured at run start. Outside compat, the
+  backend expectation is this worktree and the client
   expectation is the receipt's still-live VolView checkout. A missing sha or
   unreadable expected checkout is a hard failure rather than a silent pass.
 - The guard also hashes the served `index.html` and, when the receipt worktrees
@@ -159,5 +162,8 @@ gesture then runs automatically and cleans up the session items it mints.
 - One `playwright.config.ts` defines the capture, verify, and current projects.
   Its setup refuses to start without the phase selected by `scripts/compat.sh`,
   preventing a partial direct invocation from silently testing the wrong deploy.
-- CI does not run this harness, and carries no browser job at all; it is a
-  local tool by design.
+- CI does not currently run this harness, and carries no browser job at all; it
+  is a local tool by design. A future job must start the full DSA Compose stack
+  and check out VolView separately, then set `COMPAT_BRANCH_VOLVIEW` to that
+  checkout. Setting `COMPAT_BRANCH_VOLVIEW_SHA` to the checked-out revision adds
+  an explicit cross-repository assertion for a reproducible CI run.

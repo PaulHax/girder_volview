@@ -84,7 +84,7 @@ require_volview_sha() {
     actual=$(git -C "$checkout" rev-parse HEAD 2>/dev/null) || \
         die "$label VolView path is not a git checkout: $checkout"
     [[ $actual = "$expected" ]] || \
-        die "$label VolView is at $actual, but the compatibility pin requires $expected ($checkout)"
+        die "$label VolView is at $actual, but expected $expected ($checkout)"
 }
 
 [[ -x $DEPLOY ]] || die "deploy script not found/executable: $DEPLOY (set COMPAT_DEPLOY)"
@@ -92,9 +92,7 @@ command -v uv >/dev/null || die "uv is required (seed.py seed-small runs via 'uv
 [[ -f $MANIFEST ]] || die "missing $MANIFEST"
 
 BASELINE_VOLVIEW_SHA=${COMPAT_BASELINE_VOLVIEW_SHA:-$(manifest_sha volview)}
-BRANCH_VOLVIEW_SHA=${COMPAT_BRANCH_VOLVIEW_SHA:-$(manifest_sha branchVolview)}
 [[ $BASELINE_VOLVIEW_SHA =~ ^[0-9a-f]{40}$ ]] || die "invalid baseline VolView sha: $BASELINE_VOLVIEW_SHA"
-[[ $BRANCH_VOLVIEW_SHA =~ ^[0-9a-f]{40}$ ]] || die "invalid branch VolView sha: $BRANCH_VOLVIEW_SHA"
 
 if [[ -f $REPO/.env ]]; then
     set -a
@@ -107,8 +105,12 @@ if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == capture) ]]; then
     BASELINE_VOLVIEW=$(resolve_volview "$BASELINE_VOLVIEW")
     require_volview_sha "$BASELINE_VOLVIEW" "$BASELINE_VOLVIEW_SHA" baseline
 fi
-if [[ $SKIP_DEPLOY -eq 0 && ($PHASE == all || $PHASE == verify || $PHASE == current) ]]; then
+if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
     BRANCH_VOLVIEW=$(resolve_volview "$BRANCH_VOLVIEW")
+    BRANCH_VOLVIEW_HEAD=$(git -C "$BRANCH_VOLVIEW" rev-parse HEAD 2>/dev/null) || \
+        die "branch VolView path is not a git checkout: $BRANCH_VOLVIEW"
+    BRANCH_VOLVIEW_SHA=${COMPAT_BRANCH_VOLVIEW_SHA:-$BRANCH_VOLVIEW_HEAD}
+    [[ $BRANCH_VOLVIEW_SHA =~ ^[0-9a-f]{40}$ ]] || die "invalid branch VolView sha: $BRANCH_VOLVIEW_SHA"
     require_volview_sha "$BRANCH_VOLVIEW" "$BRANCH_VOLVIEW_SHA" branch
 fi
 
@@ -127,7 +129,9 @@ if [[ $MAIN_SHA == "$BRANCH_SHA" ]]; then
 fi
 
 echo "compat: baseline ${MAIN_SHA:0:9} at $BASELINE_DIR (VolView: ${BASELINE_VOLVIEW_SHA:0:9} at $BASELINE_VOLVIEW)"
-echo "compat: branch   ${BRANCH_SHA:0:9} at $REPO (VolView: ${BRANCH_VOLVIEW_SHA:0:9} at $BRANCH_VOLVIEW)"
+if [[ $PHASE == all || $PHASE == verify || $PHASE == current ]]; then
+    echo "compat: branch   ${BRANCH_SHA:0:9} at $REPO (VolView: ${BRANCH_VOLVIEW_SHA:0:9} at $BRANCH_VOLVIEW)"
+fi
 
 run_capture() {
     echo "compat: ensuring the small-tier DICOM cache (fetch --small is idempotent)..."
