@@ -187,7 +187,6 @@ SERVED=/opt/venv/share/girder/static/built/plugins/volview
 WEB_CLIENT=/opt/girder_volview/girder_volview/web_client
 NPM_VOLVIEW="$WEB_CLIENT/node_modules/volview"
 NPM_DIST="$NPM_VOLVIEW/dist"
-BACKEND_PKG=/opt/girder_volview/girder_volview
 
 # The girder mount source is read from GIRDER_VOLVIEW_SRC by the override, so it
 # MUST be set on every compose call or a later `compose ps` recomputes a different
@@ -214,14 +213,12 @@ echo "==> [1/6] backend: mount $GIRDER_WT ($GIRDER_SHORT) at /opt/girder_volview
 compose up -d --no-recreate
 compose up -d --force-recreate --no-deps girder
 
-# A recreate reprovisions from scratch: the DSA provision file pip-installs
-# SimpleITK plus three packages straight from git, which clone and build inside
-# the container. This is by far the slowest thing in this script — measured at
-# ~1595s (~27 min) on a normal connection, with GitHub responding in ~1s, so it
-# is throughput and building, not a network fault. The previous 900s ceiling was
-# not close, and failed as "girder never came up" while provisioning was fine.
-# The default below is that measurement plus real headroom; a slow day should
-# not need a flag.
+# A recreate reprovisions from scratch — pip installs, slicer-CLI image load and
+# a full `girder build` npm install, ~5-6 min measured. The budget below is
+# deliberately generous: it also covers a cold slicer-CLI image PULL (multi-GB,
+# and the likeliest cause if you ever see this take far longer), and the failure
+# it prevents ("girder never came up" while provisioning was fine) is expensive
+# to debug. A slow day should not need a flag.
 #
 # Two failure modes to tell apart, because they want opposite responses: still
 # provisioning (wait) versus the container exited (stop). Polling the API alone
@@ -349,10 +346,24 @@ SERVED_MD5=$(docker exec "$GIRDER" md5sum "$SERVED/index.html" | cut -d' ' -f1)
 [ "$SERVED_MD5" = "$BUILT_MD5" ] || {
     echo "    !! served SPA ($SERVED_MD5) != freshly built SPA ($BUILT_MD5) — overlay did not take" >&2; exit 1; }
 
-BE_CTR=$(tree_md5_ctr "$BACKEND_PKG")
+# Hash the INSTALLED package, not the mount: hashing the container side of the
+# bind mount would compare a directory to itself and could only ever pass. girder
+# imports from site-packages, so that is what has to match the worktree — this
+# catches a `pip install --no-deps .` that did not take. The python version is
+# globbed so a base-image bump does not silently skip the check.
+INSTALLED_PKG=$(docker exec "$GIRDER" bash -lc \
+    'ls -d /opt/venv/lib/python*/site-packages/girder_volview 2>/dev/null | head -1')
+[ -n "$INSTALLED_PKG" ] || {
+    echo "    !! girder_volview is not installed in the container's site-packages — provisioning's pip install did not take" >&2
+    echo "       docker compose -p $DSA_COMPOSE_PROJECT logs girder | grep -i girder_volview" >&2
+    exit 1; }
+
+BE_CTR=$(tree_md5_ctr "$INSTALLED_PKG")
 BE_HOST=$(tree_md5_host "$GIRDER_WT/girder_volview")
 [ "$BE_CTR" = "$BE_HOST" ] || {
-    echo "    !! mounted backend ($BE_CTR) != developing worktree ($BE_HOST) — wrong mount?" >&2; exit 1; }
+    echo "    !! installed backend ($BE_CTR) != developing worktree ($BE_HOST)" >&2
+    echo "       $INSTALLED_PKG is stale — the reinstall did not pick up this worktree." >&2
+    exit 1; }
 
 HEADS=$(mktemp)
 cat > "$HEADS" <<JSON
