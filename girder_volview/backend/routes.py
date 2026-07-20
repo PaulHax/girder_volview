@@ -324,7 +324,7 @@ def _createJobOutputFolder(launchFolder, user, submissionId):
       ``setAccessList(..., force=True, setPublic=False)`` strips that. Girder
       system administrators keep their normal force access.
     """
-    folder = Folder().createFolder(
+    created = Folder().createFolder(
         parent=_jobsContainerFolder(launchFolder, user),
         name="volview-job-%s" % submissionId,
         parentType="folder",
@@ -332,15 +332,28 @@ def _createJobOutputFolder(launchFolder, user, submissionId):
         public=False,
         reuseExisting=False,
     )
-    folder = Folder().setMetadata(folder, {JOB_OUTPUT_FOLDER_META_KEY: True})
-    Folder().setAccessList(
-        folder,
-        {"users": [{"id": user["_id"], "level": AccessType.ADMIN}], "groups": []},
-        save=True,
-        force=True,
-        setPublic=False,
-    )
-    return folder
+    try:
+        folder = Folder().setMetadata(created, {JOB_OUTPUT_FOLDER_META_KEY: True})
+        Folder().setAccessList(
+            folder,
+            {
+                "users": [{"id": user["_id"], "level": AccessType.ADMIN}],
+                "groups": [],
+            },
+            save=True,
+            force=True,
+            setPublic=False,
+        )
+        return folder
+    except Exception:
+        try:
+            Folder().remove(created)
+        except Exception:
+            logger.exception(
+                "Failed to remove partially initialized job output folder %s",
+                created.get("_id"),
+            )
+        raise
 
 
 def _removeJobOutputFolder(folder):

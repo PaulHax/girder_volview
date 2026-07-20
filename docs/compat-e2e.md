@@ -73,13 +73,17 @@ service's volume list by mount target, so it replaces upstream's hardcoded
 
 - **The baseline backend** — no checkout required. It is exported from this
   repo's own history at the sha pinned in `e2e/compat-baseline.json`. Override
-  for a one-off with `COMPAT_BASELINE_REF=origin/main`, or point at a tree you
-  are editing with `COMPAT_OLD_CHECKOUT` + `COMPAT_OLD_SHA`.
+  for a one-off with `COMPAT_BASELINE_REF=origin/main`, or point at a real git
+  checkout with `COMPAT_OLD_CHECKOUT` + `COMPAT_OLD_SHA`. The checkout's HEAD
+  must equal that sha; the deploy derives its receipt directly from git.
 - **VolView worktrees** `main` and `just-jobs` under `VOLVIEW_ROOT` (override
   `COMPAT_BASELINE_VOLVIEW` / `COMPAT_BRANCH_VOLVIEW`). The baseline's VolView
   sha and published npm version are recorded in `e2e/compat-baseline.json` so
   the pairing is reproducible off this machine; the branch-side client is
-  unpublished and must build from source.
+  unpublished and must build from source. Before either deploy, the harness
+  requires each checkout's HEAD to equal its manifest pin. A one-off checkout
+  override therefore needs a matching `COMPAT_BASELINE_VOLVIEW_SHA` or
+  `COMPAT_BRANCH_VOLVIEW_SHA` override too.
 
 To move the baseline forward, resolve the new sha and edit
 `e2e/compat-baseline.json`. It is pinned rather than floating so that a red
@@ -114,12 +118,18 @@ gesture then runs automatically and cleans up the session items it mints.
 
 ## Guards
 
-- `verifyDeployedHeads` (e2e/helpers/stack.ts) normally requires the deployed
-  `girderSha` to equal this worktree's HEAD. The capture phase runs against the
-  baseline deploy on purpose, so `compat.sh` passes
-  `E2E_EXPECT_GIRDER_SHA=<baseline sha>`; with the env var unset, behavior is
-  unchanged. A receipt with no `girderSha`, or a worktree git cannot read, is a
-  hard failure rather than a silent pass.
+- `verifyDeployedHeads` (e2e/helpers/stack.ts) requires the deployed backend and
+  client shas to equal the intended checkouts. The capture phase runs against
+  the baseline pair on purpose, so `compat.sh` passes both
+  `E2E_EXPECT_GIRDER_SHA=<baseline sha>` and
+  `E2E_EXPECT_VOLVIEW_SHA=<baseline client sha>`; verify passes both branch
+  pins. Outside compat, the backend expectation is this worktree and the client
+  expectation is the receipt's still-live VolView checkout. A missing sha or
+  unreadable expected checkout is a hard failure rather than a silent pass.
+- The guard also hashes the served `index.html` and, when the receipt worktrees
+  are locally accessible, compares both the built client and Python source tree
+  to the receipt. Moving a checkout or changing code after deploy therefore
+  requires a fresh deploy rather than producing a false green run.
 - `script/deploy` writes the receipt only after it has proven the served SPA
   and the mounted backend match what it deployed, so a receipt never certifies
   a deploy that failed partway.

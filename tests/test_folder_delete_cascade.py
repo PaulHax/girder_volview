@@ -101,6 +101,36 @@ def test_output_folders_nest_in_one_marked_container(server, owner, launchFolder
         ]
 
 
+@pytest.mark.plugin("volview")
+def test_output_folder_acl_failure_removes_partial_folder(
+    server, owner, launchFolder, monkeypatch
+):
+    from girder.models.folder import Folder
+
+    submissionId = uuid.uuid4().hex
+
+    def failAccessList(*args, **kwargs):
+        raise RuntimeError("cannot set output ACL")
+
+    monkeypatch.setattr(Folder, "setAccessList", failAccessList)
+
+    with pytest.raises(RuntimeError, match="cannot set output ACL"):
+        routes._createJobOutputFolder(launchFolder, owner, submissionId)
+
+    container = _container(launchFolder)
+    assert container is not None
+    assert (
+        Folder().findOne(
+            {
+                "parentId": container["_id"],
+                "parentCollection": "folder",
+                "name": "volview-job-%s" % submissionId,
+            }
+        )
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2. Deleting a terminal job's folder deletes the job (+ sweeps staged inputs)
 # ---------------------------------------------------------------------------

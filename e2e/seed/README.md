@@ -128,14 +128,12 @@ documented O(n²) blowup (`../../plans/DICOM_S3_IMPORT_ROOT_CAUSE.md`, 2 s → 7
 per file). `seed` disables it and restores the previous value afterwards. If an
 import crawls, check this before blaming the data.
 
-**The VolView config resolves by item name, and there are two names.**
-`girder_volview` matches an item name against the URL segment, and the two entry
-points ask for different things: the folder manifest requests
-`.volview_config.yaml`, while the "open in VolView" link built by the item list
-requests `config.json`. `seed` publishes the same YAML under both names. Get this
-wrong and the endpoint quietly serves only `BASE_CONFIG` — the config appears
-uploaded and does nothing. `verify` compares the *served* config against the
-local file for exactly this reason.
+**The VolView config resolves by item name.** `girder_volview` matches an item
+name against the URL segment, and both the folder manifest and the "open in
+VolView" link request `.volview_config.yaml`. Get that name wrong and the
+endpoint quietly serves only `BASE_CONFIG` — the config appears uploaded and
+does nothing. `verify` compares the *served* config against the local file for
+exactly this reason.
 
 **VolView drops invalid config values silently.** `disabledViewTypes` accepts
 only `2D`, `3D`, `Oblique`; layout view names only `axial`, `coronal`,

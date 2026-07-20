@@ -3,6 +3,7 @@ import ItemListWidget from "@girder/large_image/views/itemList";
 import { restRequest } from "@girder/core/rest";
 import { confirm } from "@girder/core/dialog";
 import { wrap } from "@girder/core/utilities/PluginUtils";
+
 import {
     addButton,
     groupingFilterForItem,
@@ -93,14 +94,14 @@ wrap(HierarchyWidget, "render", function (render) {
 
         if (resources.item && resources.item.length > 0) {
             const items = resources.item.map((cid) =>
-                this.itemListView.collection.get(cid)
+                this.itemListView.collection.get(cid),
             );
             const volViewZipsNewestFirst = items
                 .filter(isSessionItem)
                 .sort(
                     (a, b) =>
                         new Date(b.attributes.created) -
-                        new Date(a.attributes.created)
+                        new Date(a.attributes.created),
                 );
 
             if (volViewZipsNewestFirst.length > 0) {
@@ -133,7 +134,7 @@ wrap(HierarchyWidget, "render", function (render) {
         const groupedFilters = checkedGroupingFilters(this.itemListView, resources);
         if (groupedFilters) {
             button.innerHTML = openChecked;
-            $(button).attr('href', openCheckedGroupedURL(this.parentModel, groupedFilters));
+            $(button).attr("href", openCheckedGroupedURL(this.parentModel, groupedFilters));
             return;
         }
         const hasResources = (
@@ -141,7 +142,7 @@ wrap(HierarchyWidget, "render", function (render) {
             (resources.folder && resources.folder.length)
         );
         button.innerHTML = hasResources ? openChecked : openFolder;
-        $(button).attr('href', openResourcesURL(this.parentModel, resources));
+        $(button).attr("href", openResourcesURL(this.parentModel, resources));
     };
     updateChecked();
 
@@ -150,7 +151,7 @@ wrap(HierarchyWidget, "render", function (render) {
 
     updateButtonVisibility(
         this.$el.find(".open-in-volview"),
-        this.parentModel.id
+        this.parentModel.id,
     );
 });
 
@@ -171,29 +172,29 @@ wrap(ItemListWidget, "render", function (render) {
     updateButtonVisibility(button, id);
 });
 
-ItemListWidget.registeredApplications['volview'] = {
-    name: 'VolView',
+ItemListWidget.registeredApplications.volview = {
+    name: "VolView",
     check: (modelType, model, folder) => {
-        if (modelType === 'item') {
+        if (modelType === "item") {
             if (isSessionItem(model)) {
                 // A session.volview.zip/json item opens as a saved session.
             } else {
                 try {
-                    if (!model.get('meta') || !model.get('meta').dicom || model.get('meta').dicom.Modality === 'SM') {
+                    if (!model.get("meta") || !model.get("meta").dicom || model.get("meta").dicom.Modality === "SM") {
                         return false;
                     }
                 } catch (e) {
                     return false;
                 }
             }
-            if (model.get('meta')._grouping) {
-                return {url: openGroupedItemURL(model, folder)};
+            if (model.get("meta")._grouping) {
+                return { url: openGroupedItemURL(model, folder) };
             }
-            return {url: openItemURL(model)};
+            return { url: openItemURL(model) };
         }
-        if (modelType === 'folder') {
+        if (modelType === "folder") {
             // TODO: this needs to mimic what is done in python
-            return {url: openResourcesURL(model, {})};
+            return { url: openResourcesURL(model, {}) };
         }
-    }
+    },
 };

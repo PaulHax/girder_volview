@@ -1,4 +1,6 @@
 import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import * as path from 'path';
 import { APIRequestContext } from '@playwright/test';
 import { CONFIG, apiUrl } from './config';
@@ -47,11 +49,13 @@ export async function healthCheck(request: APIRequestContext): Promise<void> {
 // so a stale deploy fails loud instead of surfacing as a confusing mid-test
 // assertion against a different checkout.
 const RECEIPT_URL = `${CONFIG.baseURL}/static/built/plugins/volview/deployed-heads.json`;
+const INDEX_URL = `${CONFIG.baseURL}/static/built/plugins/volview/index.html`;
 
-// Only girderSha is enforced; the rest are informational. Extra fields are fine.
 export type DeployReceipt = {
+  girderWorktree?: string;
   girderSha?: string;
   girderShort?: string;
+  volviewWorktree?: string;
   volviewSha?: string;
   volviewShort?: string;
   indexMd5?: string;
@@ -71,6 +75,33 @@ function gitHead(dir: string): string | null {
   } catch {
     return null;
   }
+}
+
+function md5(data: Buffer | string): string {
+  return createHash('md5').update(data).digest('hex');
+}
+
+function pythonFiles(root: string, dir = root): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...pythonFiles(root, fullPath));
+    else if (entry.isFile() && entry.name.endsWith('.py')) files.push(fullPath);
+  }
+  return files;
+}
+
+// Mirrors script/deploy's `find | sort | xargs md5sum | md5sum` receipt hash.
+function pythonTreeMd5(root: string): string {
+  const digestLines = pythonFiles(root)
+    .map((file) => `./${path.relative(root, file).split(path.sep).join('/')}`)
+    .sort()
+    .map(
+      (relative) =>
+        `${md5(readFileSync(path.join(root, relative.slice(2))))}  ${relative}\n`
+    )
+    .join('');
+  return md5(digestLines);
 }
 
 export async function verifyDeployedHeads(request: APIRequestContext): Promise<void> {
@@ -125,6 +156,85 @@ export async function verifyDeployedHeads(request: APIRequestContext): Promise<v
         `${override ? ' (from E2E_EXPECT_GIRDER_SHA)' : ' (this worktree HEAD)'}.\n` +
         `Redeploy and refresh the receipt. ${RECEIPT_HINT}`
     );
+  }
+
+  const volviewOverride = process.env.E2E_EXPECT_VOLVIEW_SHA;
+  const receiptVolviewHead = receipt.volviewWorktree
+    ? gitHead(receipt.volviewWorktree)
+    : null;
+  const expectedVolview = volviewOverride || receiptVolviewHead;
+  if (volviewOverride) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[e2e] E2E_EXPECT_VOLVIEW_SHA set: expecting deployed VolView ${volviewOverride.slice(0, 9)}`
+    );
+  }
+  if (!receipt.volviewSha) {
+    throw new Error(
+      `[e2e] the deploy receipt at ${RECEIPT_URL} has no volviewSha, so it cannot ` +
+        `certify which client the stack serves. ${RECEIPT_HINT}`
+    );
+  }
+  if (!expectedVolview) {
+    throw new Error(
+      `[e2e] cannot determine the expected VolView sha: the receipt's VolView worktree ` +
+        `is unavailable and E2E_EXPECT_VOLVIEW_SHA is unset. Set E2E_EXPECT_VOLVIEW_SHA ` +
+        `to the client sha the stack should serve.`
+    );
+  }
+  if (expectedVolview !== receipt.volviewSha) {
+    throw new Error(
+      `[e2e] deploy is stale: the stack serves VolView ${receipt.volviewShort}, but the ` +
+        `expected sha is ${expectedVolview.slice(0, 9)}` +
+        `${volviewOverride ? ' (from E2E_EXPECT_VOLVIEW_SHA)' : ' (receipt worktree HEAD)'}.\n` +
+        `Redeploy and refresh the receipt. ${RECEIPT_HINT}`
+    );
+  }
+
+  if (!receipt.indexMd5) {
+    throw new Error(`[e2e] deploy receipt has no indexMd5. ${RECEIPT_HINT}`);
+  }
+  const servedIndex = await request.get(INDEX_URL, { timeout: 10_000 });
+  if (!servedIndex.ok()) {
+    throw new Error(
+      `[e2e] cannot read deployed VolView index at ${INDEX_URL} (HTTP ${servedIndex.status()})`
+    );
+  }
+  const servedIndexMd5 = md5(await servedIndex.body());
+  if (servedIndexMd5 !== receipt.indexMd5) {
+    throw new Error(
+      `[e2e] deployed VolView index hash is ${servedIndexMd5}, but the receipt records ` +
+        `${receipt.indexMd5}. Redeploy and refresh the receipt.`
+    );
+  }
+
+  if (receipt.volviewWorktree && existsSync(receipt.volviewWorktree)) {
+    const builtIndex = path.join(receipt.volviewWorktree, 'dist', 'index.html');
+    if (!existsSync(builtIndex)) {
+      throw new Error(
+        `[e2e] receipt VolView worktree has no built index: ${builtIndex}`
+      );
+    }
+    const builtIndexMd5 = md5(readFileSync(builtIndex));
+    if (builtIndexMd5 !== receipt.indexMd5) {
+      throw new Error(
+        `[e2e] VolView worktree build hash is ${builtIndexMd5}, but the deployed receipt ` +
+          `records ${receipt.indexMd5}. Redeploy before running the browser suite.`
+      );
+    }
+  }
+
+  if (!receipt.backendTreeMd5) {
+    throw new Error(`[e2e] deploy receipt has no backendTreeMd5. ${RECEIPT_HINT}`);
+  }
+  if (receipt.girderWorktree && existsSync(receipt.girderWorktree)) {
+    const currentBackendMd5 = pythonTreeMd5(receipt.girderWorktree);
+    if (currentBackendMd5 !== receipt.backendTreeMd5) {
+      throw new Error(
+        `[e2e] girder_volview worktree hash is ${currentBackendMd5}, but the deployed ` +
+          `receipt records ${receipt.backendTreeMd5}. Redeploy before running the browser suite.`
+      );
+    }
   }
 
   // eslint-disable-next-line no-console

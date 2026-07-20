@@ -28,8 +28,8 @@ set -euo pipefail
 # Env:
 #   COMPAT_BASELINE_REF   resolve this ref instead of the pinned sha
 #   COMPAT_NO_FETCH=1     skip the `git fetch` refresh (offline)
-#   COMPAT_OLD_CHECKOUT   use this tree as-is; requires COMPAT_OLD_SHA
-#   COMPAT_OLD_SHA        the sha COMPAT_OLD_CHECKOUT represents
+#   COMPAT_OLD_CHECKOUT   use this git checkout as-is; requires COMPAT_OLD_SHA
+#   COMPAT_OLD_SHA        required HEAD of COMPAT_OLD_CHECKOUT
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
@@ -40,10 +40,16 @@ die() { echo "materialize-baseline: $*" >&2; exit 1; }
 # Escape hatch for iterating on a baseline that is not a committed ref (the
 # PostgreSQL cross-version suite exposes the same seam as `oldinstall`).
 if [ -n "${COMPAT_OLD_CHECKOUT:-}" ]; then
-    [ -n "${COMPAT_OLD_SHA:-}" ] || die "COMPAT_OLD_CHECKOUT requires COMPAT_OLD_SHA (the deploy receipt must name a real commit)"
+    [ -n "${COMPAT_OLD_SHA:-}" ] || die "COMPAT_OLD_CHECKOUT requires COMPAT_OLD_SHA"
     [ -f "$COMPAT_OLD_CHECKOUT/setup.py" ] || die "COMPAT_OLD_CHECKOUT is not a girder_volview tree: $COMPAT_OLD_CHECKOUT"
-    echo "materialize-baseline: using COMPAT_OLD_CHECKOUT=$COMPAT_OLD_CHECKOUT" >&2
-    echo "$COMPAT_OLD_SHA"
+    ACTUAL_SHA=$(git -C "$COMPAT_OLD_CHECKOUT" rev-parse HEAD 2>/dev/null) || \
+        die "COMPAT_OLD_CHECKOUT must be a git checkout: $COMPAT_OLD_CHECKOUT"
+    EXPECTED_SHA=$(git -C "$COMPAT_OLD_CHECKOUT" rev-parse --verify "$COMPAT_OLD_SHA^{commit}" 2>/dev/null) || \
+        die "COMPAT_OLD_SHA is not a commit in $COMPAT_OLD_CHECKOUT: $COMPAT_OLD_SHA"
+    [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || \
+        die "COMPAT_OLD_CHECKOUT is at $ACTUAL_SHA, expected $EXPECTED_SHA"
+    echo "materialize-baseline: using COMPAT_OLD_CHECKOUT=$COMPAT_OLD_CHECKOUT (${ACTUAL_SHA:0:9})" >&2
+    echo "$ACTUAL_SHA"
     exit 0
 fi
 

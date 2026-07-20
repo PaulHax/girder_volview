@@ -59,7 +59,6 @@ MINIO_SECRET = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 BUCKET = os.environ.get("DEVKIT_BUCKET", "dsa-devkit")
 
 VOLVIEW_CONFIG_NAME = ".volview_config.yaml"
-VOLVIEW_OPEN_LINK_NAME = "config.json"
 
 # VolView validates its config with zod and silently drops values that don't
 # match, so an invalid-but-plausible entry looks like it applied and does
@@ -855,18 +854,6 @@ def cmd_seed(args) -> None:
             for config in sorted((CONFIGS_DIR / prefix).glob(".*.yaml")):
                 upload_config(gc, folder_id, config)
                 log(f"  {prefix}/{config.name}")
-                if config.name == VOLVIEW_CONFIG_NAME:
-                    # girder_volview resolves the config by matching an item
-                    # name to the URL segment, and the two entry points ask for
-                    # different names: the folder manifest requests
-                    # .volview_config.yaml, while the "open in VolView" link
-                    # built by the item list requests config.json. Publish under
-                    # both names (contents are YAML either way) or the config
-                    # silently does nothing in the click-through flow.
-                    upload_config(
-                        gc, folder_id, config, item_name=VOLVIEW_OPEN_LINK_NAME
-                    )
-                    log(f"  {prefix}/{VOLVIEW_OPEN_LINK_NAME} (same content)")
     finally:
         set_setting(gc, "large_image.auto_set", previous_auto_set)
         log(f"Restored large_image.auto_set to {previous_auto_set!r}")
@@ -1046,7 +1033,6 @@ def cmd_verify(args) -> None:
         names = {i["name"] for i in gc.listItem(roots[prefix])}
         check(f"{prefix}/.large_image_config.yaml", ".large_image_config.yaml" in names)
         check(f"{prefix}/{VOLVIEW_CONFIG_NAME}", VOLVIEW_CONFIG_NAME in names)
-        check(f"{prefix}/{VOLVIEW_OPEN_LINK_NAME}", VOLVIEW_OPEN_LINK_NAME in names)
 
     # Checking that the item exists is not enough: the config resolves by item
     # name, so a name mismatch leaves the endpoint quietly serving BASE_CONFIG.
@@ -1068,26 +1054,27 @@ def cmd_verify(args) -> None:
             f"invalid {bad_views}",
         )
 
-        for name in (VOLVIEW_CONFIG_NAME, VOLVIEW_OPEN_LINK_NAME):
-            served = gc.get(f"folder/{roots[prefix]}/volview_config/{name}")
-            check(
-                f"{prefix} via {name}: disabledViewTypes applied",
-                served.get("disabledViewTypes") == local["disabledViewTypes"],
-                f"served {served.get('disabledViewTypes')}",
-            )
-            authored = set(local["layouts"]) - {"__all__"}
-            check(
-                f"{prefix} via {name}: layouts applied",
-                authored <= set(served.get("layouts", {})),
-                f"served {sorted(served.get('layouts', {}))}",
-            )
-            # First key of the served map is the one VolView switches to.
-            active = next(iter(served.get("layouts", {})), None)
-            check(
-                f"{prefix} via {name}: opens in {EXPECTED_ACTIVE_LAYOUT[prefix]!r}",
-                active == EXPECTED_ACTIVE_LAYOUT[prefix],
-                f"would open {active!r}",
-            )
+        served = gc.get(
+            f"folder/{roots[prefix]}/volview_config/{VOLVIEW_CONFIG_NAME}"
+        )
+        check(
+            f"{prefix}: disabledViewTypes applied",
+            served.get("disabledViewTypes") == local["disabledViewTypes"],
+            f"served {served.get('disabledViewTypes')}",
+        )
+        authored = set(local["layouts"]) - {"__all__"}
+        check(
+            f"{prefix}: layouts applied",
+            authored <= set(served.get("layouts", {})),
+            f"served {sorted(served.get('layouts', {}))}",
+        )
+        # First key of the served map is the one VolView switches to.
+        active = next(iter(served.get("layouts", {})), None)
+        check(
+            f"{prefix}: opens in {EXPECTED_ACTIVE_LAYOUT[prefix]!r}",
+            active == EXPECTED_ACTIVE_LAYOUT[prefix],
+            f"would open {active!r}",
+        )
 
     log("\nVolView manifest")
     token = gc.token

@@ -7,6 +7,7 @@ Needs a live pytest-girder Mongo; the module self-skips when it is unreachable.
 
 import datetime
 import io
+import time
 from conftest import _reload, mongo_reachable
 
 import jsonschema
@@ -120,7 +121,14 @@ def test_job_history_history_index_exists_in_query_order(db, server):
     # installation boundary; the database fixture alone does not load plugins.
     from girder_jobs.models.job import Job
 
-    index = Job().collection.index_information()["volview_job_history"]
+    deadline = time.monotonic() + 5
+    while True:
+        index = Job().collection.index_information().get("volview_job_history")
+        if index is not None or time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+
+    assert index is not None
     assert index["key"] == [
         (inputs._LAUNCH_FOLDER_FIELD, 1),
         ("userId", 1),

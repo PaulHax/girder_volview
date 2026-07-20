@@ -93,7 +93,7 @@ const VOLVIEW = 'static/built/plugins/volview/index.html';
 const enc = encodeURIComponent;
 
 function configLeg(folderId: string): string {
-  return `&config=${enc(`/${CONFIG.apiRoot}/folder/${folderId}/volview_config/config.json`)}`;
+  return `&config=${enc(`/${CONFIG.apiRoot}/folder/${folderId}/volview_config/.volview_config.yaml`)}`;
 }
 
 export type Gesture = 'single-item' | 'checked' | 'filter' | 'bare-folder';

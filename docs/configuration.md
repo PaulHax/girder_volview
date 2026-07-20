@@ -148,7 +148,7 @@ Valid values: `2D`, `3D`, `Oblique`
 
 ## Label Configuration
 
-To assign labels and their properties, add a `.volview_config.yaml` file higher in the folder hierarchy.  
+To assign labels and their properties, add a `.volview_config.yaml` file higher in the folder hierarchy.
 Example `.volview_config.yaml` file:
 
 ```yml
