@@ -40,6 +40,9 @@ Details, including the launch URL parameters and per-gesture flows, are in
 
 - [Session Builder](./session_builder/README.md) — generate VolView sessions
   programmatically with Python, e.g. from analysis pipelines.
+- [VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) —
+  reference task image used to drive Girder-VolView processing in development
+  and end-to-end tests.
 - [Customize file browsing](./docs/customize_file_browsing.md) — group images
   and add metadata columns via `.large_image_config.yaml`.
 - [Server administration](./docs/admin.md) — S3 download proxying.

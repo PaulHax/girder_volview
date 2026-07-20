@@ -68,6 +68,25 @@ same-origin egress gate; a same-origin deployment (such as DSA) needs no
 configuration, and cross-origin targets are never allowed.
 See [Processing provider & remote-save origin gate](./processing_origin_gate.md).
 
+## Radiology CLI task image
+
+The development stack uses the
+[VolView Radiology CLI](https://github.com/PaulHax/volview-radiology-cli) as
+reference infrastructure to drive and test the processing backend. Clone it
+locally and set `CLI_REPO` in this repository's `.env` to that checkout:
+
+```sh
+git clone https://github.com/PaulHax/volview-radiology-cli
+# In girder_volview/.env:
+CLI_REPO=/path/to/volview-radiology-cli
+```
+
+When processing routes are present, `script/deploy` calls
+`script/ensure-radiology-cli`. That script builds the local
+`volview-radiology-cli:latest` image if it is missing, registers it with
+`slicer_cli_web`, and verifies the declared tasks are available. It does not
+pull this image from a registry.
+
 ## Updating the VolView client version
 
 1. Update the [volview](https://www.npmjs.com/package/volview?activeTab=versions) version in `./girder_volview/web_client/package.json`
