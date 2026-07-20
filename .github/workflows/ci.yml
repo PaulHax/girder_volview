@@ -61,33 +61,3 @@ jobs:
         run: |
           npm ci
           npm run lint
-
-  # Drives the token-only run + auto-apply UI path
-  # (e2e/tests/run-and-apply.spec.ts). The paired stack it needs is defined
-  # outside this repo, so the job is opt-in. The dist it serves is the same
-  # pinned `volview` package `girder build` installs from
-  # web_client/package.json.
-  paired-browser:
-    name: Paired browser gate (token-only run + auto-apply)
-    runs-on: ubuntu-latest
-    if: ${{ vars.RUN_PAIRED_BROWSER_GATE == 'true' }}
-    steps:
-      - name: Checkout girder_volview (self)
-        uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Bring up paired stack
-        # The stack: mongo + girder + girder_worker serving the pinned `volview`
-        # dist, reachable at http://localhost:8080 (admin/password), with the
-        # radiology CLI tasks registered in slicer_cli_web and the deploy receipt
-        # written.
-        run: |
-          echo "Provision the paired live stack here (see job comment)." >&2
-          exit 1
-      - name: Run the browser gate
-        working-directory: e2e
-        run: |
-          npm ci
-          npm run install-browser
-          npm test

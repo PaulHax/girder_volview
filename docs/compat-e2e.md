@@ -140,5 +140,5 @@ gesture then runs automatically and cleans up the session items it mints.
 - The normal suite (`npm test`) ignores `tests/compat/` entirely; compat specs
   run only under `compat.playwright.config.ts`, which refuses to start without
   `COMPAT_PHASE`.
-- CI does not run this harness (the paired-browser gate remains a stub); it is
-  a local tool by design.
+- CI does not run this harness, and carries no browser job at all; it is a
+  local tool by design.
