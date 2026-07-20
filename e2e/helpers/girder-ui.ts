@@ -73,6 +73,18 @@ export async function checkRowByItemId(page: Page, itemId: string): Promise<void
   await row.locator('input.g-list-checkbox').check();
 }
 
+// Clear every checked row. gotoFolder changes the hash IN-APP, so checkbox
+// state survives navigation — a "bare folder-open" right after a checked
+// gesture would otherwise still carry the earlier selection.
+export async function uncheckAllRows(page: Page): Promise<void> {
+  const checked = () => page.locator('input.g-list-checkbox:checked');
+  // Bounded: each uncheck removes one from the set.
+  for (let guard = 0; guard < 50 && (await checked().count()) > 0; guard += 1) {
+    await checked().first().uncheck();
+  }
+  await expect(checked(), 'rows remained checked').toHaveCount(0);
+}
+
 // Grouped item lists render metadata columns as cell text; match a row by the
 // conjunction of distinctive cell values (e.g. PatientID + SeriesDescription).
 export function rowByTexts(page: Page, texts: string[]) {

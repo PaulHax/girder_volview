@@ -1,4 +1,4 @@
-import { Page } from '@playwright/test';
+import { Page, expect } from '@playwright/test';
 import { waitForVolViewReady } from './volview';
 
 // Manifest interception shared by the lifecycle and compat suites: capture the
@@ -21,6 +21,16 @@ export async function captureManifest(page: Page, navigate: () => Promise<unknow
   const manifestResp = page.waitForResponse(isManifestGet, { timeout: 60_000 });
   await navigate();
   const resp = await manifestResp.catch(() => undefined);
+  // Status BEFORE the readiness wait, on purpose: a failed manifest means the
+  // viewer never gets data, so waiting first turns a plain HTTP error into a
+  // 90s "viewer never became ready" timeout that names nothing. Checked here
+  // rather than in each caller so every launch and F5 gets it.
+  if (resp) {
+    expect(
+      resp.ok(),
+      `manifest ${new URL(resp.url()).pathname} returned HTTP ${resp.status()}`
+    ).toBeTruthy();
+  }
   await waitForVolViewReady(page);
   if (!resp) return undefined;
   try {

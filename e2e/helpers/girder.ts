@@ -85,6 +85,42 @@ export async function countSessionItems(request: APIRequestContext, g: Girder): 
   return (await listSessionItems(request, g.token, g.folderId)).length;
 }
 
+// The id of an item's first file. Two saves collide on file NAME (girder
+// dedupes the item name, "session.volview.zip (1)", while the file inside keeps
+// the original), so the file id is what distinguishes one save from another in
+// a manifest — resources carry it in their minted /file/<id>/proxiable URL.
+export async function firstFileId(
+  request: APIRequestContext,
+  token: string,
+  itemId: string
+): Promise<string> {
+  const res = await request.get(api(`/item/${itemId}/files?limit=1`), {
+    headers: { 'Girder-Token': token },
+  });
+  expect(res.ok(), `GET /item/${itemId}/files returned HTTP ${res.status()}`).toBeTruthy();
+  const files: Array<{ _id: string }> = await res.json();
+  expect(files?.[0]?._id, `item ${itemId} has no files`).toBeTruthy();
+  return files[0]._id;
+}
+
+export const resourceUrls = (json: any): string[] =>
+  Array.isArray(json?.resources) ? json.resources.map((r: any) => r?.url).filter(Boolean) : [];
+
+// Fetch a manifest by the `urls=` leg a launched tab is carrying. Used to
+// inspect WHICH resources a launch resolved to without racing the tab's own
+// in-flight request (a popup can finish loading before an interceptor attaches).
+export async function fetchManifest(
+  request: APIRequestContext,
+  token: string,
+  urls: string
+): Promise<any> {
+  const res = await request.get(`${CONFIG.baseURL}${urls}`, {
+    headers: { 'Girder-Token': token },
+  });
+  expect(res.ok(), `manifest ${urls} returned HTTP ${res.status()}`).toBeTruthy();
+  return res.json();
+}
+
 // A replica of the plugin launcher (girder_volview/web_client/views/open.js).
 const VOLVIEW = 'static/built/plugins/volview/index.html';
 const enc = encodeURIComponent;
@@ -134,11 +170,14 @@ export function launchUrl(
     const urls = `&urls=${enc(manifest)}`;
     return { url: `${base}?${save}${names}${urls}${cfg}${tok}`, freshManifest: manifest };
   }
-  // bare-folder: no items/folders/filter -> resumes newest session, else raw
+  // bare-folder: no items/folders/filter -> resumes newest session, else raw.
+  // The EMPTY folders=/items= legs are deliberate: open.js always emits them
+  // (resourcesToDownloadParams joins empty lists), and the backend parses ""
+  // to an empty list, so this is the bare gesture as the product spells it.
   const folderRoute = `/${CONFIG.apiRoot}/folder/${g.folderId}`;
   const meta = { linkedResources: { items: [], folders: [] } };
   const save = `&save=${folderRoute}/volview?metadata=${enc(JSON.stringify(meta))}`;
-  const manifest = `/${CONFIG.apiRoot}/folder/${g.folderId}/volview`;
+  const manifest = `/${CONFIG.apiRoot}/folder/${g.folderId}/volview?folders=&items=`;
   const urls = `&urls=${enc(manifest)}`;
   return { url: `${base}?${save}${names}${urls}${cfg}`, freshManifest: manifest };
 }
