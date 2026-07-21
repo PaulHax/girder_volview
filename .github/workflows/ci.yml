@@ -20,7 +20,7 @@ jobs:
     container: girder/girder_test:latest
     services:
       mongo:
-        image: mongo:4.0
+        image: mongo:4.4
         # RAM-backed data dir keeps the per-test drop/reconnect cheap.
         options: >-
           --tmpfs /data/db
